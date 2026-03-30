@@ -36,6 +36,12 @@ class DepthSource(ABC):
         """Return a 2-D float32 array of shape (height, width), values in [0, 1]."""
         ...
 
+    def sculpt(self, cx: int, cy: int, radius: int, delta: float) -> None:
+        """Brush-paint the depth map. No-op for hardware sources."""
+
+    def resize(self, width: int, height: int) -> None:
+        """Resize the output frame dimensions. No-op by default."""
+
 
 class MouseSimulator(DepthSource):
     """
@@ -74,6 +80,18 @@ class MouseSimulator(DepthSource):
 
     def reset(self) -> None:
         self._map[:] = self.DEFAULT_LEVEL
+
+    def resize(self, width: int, height: int) -> None:
+        """Resize the internal height map, preserving sculpted terrain."""
+        from scipy.ndimage import zoom as _zoom
+        if (height, width) == self._map.shape:
+            return
+        zy = height / self._map.shape[0]
+        zx = width  / self._map.shape[1]
+        self._map = _zoom(self._map, (zy, zx), order=1).astype(np.float32)
+        self.width  = width
+        self.height = height
+        self._ys, self._xs = np.mgrid[0:height, 0:width]
 
     def get_frame(self) -> np.ndarray:
         return self._map.copy()
@@ -249,28 +267,31 @@ class KinectV1Source(DepthSource):
         """Called from the freenect event thread on each new depth frame."""
         if not data_ptr:
             return
-        # Interpret the raw buffer as a 480×640 uint16 array (no copy yet)
+
+        # Snapshot mutable config under lock so we use consistent values
+        # for the whole frame computation without holding the lock during work.
+        with self._lock:
+            out_h = self._out_height
+            out_w = self._out_width
+            min_  = self._min
+            max_  = self._max
+
         import ctypes
         raw = np.frombuffer(
             (ctypes.c_uint16 * (480 * 640)).from_address(data_ptr),
             dtype=np.uint16,
         ).reshape(480, 640).copy().astype(np.float32)
 
-        # Pixels with no valid reading → treat as maximum distance (floor)
-        raw[(raw == 0) | (raw >= self._DEPTH_RAW_NO_DATA)] = self._max
+        raw[(raw == 0) | (raw >= self._DEPTH_RAW_NO_DATA)] = max_
 
-        # Closer → higher normalised value (raised sand)
         frame = np.clip(
-            1.0 - (raw - self._min) / (self._max - self._min),
+            1.0 - (raw - min_) / (max_ - min_),
             0.0, 1.0,
         ).astype(np.float32)
 
-        # Resize to output dimensions if they differ from native 480×640
-        if frame.shape != (self._out_height, self._out_width):
+        if frame.shape != (out_h, out_w):
             from scipy.ndimage import zoom
-            zy = self._out_height / frame.shape[0]
-            zx = self._out_width  / frame.shape[1]
-            frame = zoom(frame, (zy, zx), order=1).astype(np.float32)
+            frame = zoom(frame, (out_h / 480, out_w / 640), order=1).astype(np.float32)
 
         with self._lock:
             self._latest = frame
@@ -286,6 +307,19 @@ class KinectV1Source(DepthSource):
     def get_frame(self) -> np.ndarray:
         with self._lock:
             return self._latest.copy()
+
+    def set_depth_range(self, min_mm: int, max_mm: int) -> None:
+        """Update depth calibration from the settings sidebar."""
+        with self._lock:
+            self._min = float(min_mm)
+            self._max = float(max_mm)
+
+    def resize(self, width: int, height: int) -> None:
+        """Update output frame size (e.g. after a fullscreen display change)."""
+        with self._lock:
+            self._out_width  = width
+            self._out_height = height
+            self._latest     = np.full((height, width), 0.5, dtype=np.float32)
 
     def close(self) -> None:
         """Stop the Kinect and release resources."""
