@@ -6,8 +6,5 @@ __pycache__/
 # uv / virtualenv
 .venv/
 
-# Built Windows runtime DLLs — run setup-windows.ps1 to generate these
-*.dll
-
 # Claude Code local settings
 .claude/
