@@ -57,29 +57,33 @@ Controls:
 - Windows 10 / 11
 - Python 3.13+ (via [python.org](https://www.python.org/))
 - [uv](https://docs.astral.sh/uv/) — `pip install uv`
-- Visual Studio 2019 Build Tools (C++ workload) — needed to compile libfreenect
-- CMake — `winget install Kitware.CMake`
 - Git
 
-### 1 — Automated setup (recommended)
+`freenect.dll` and `libusb-1.0.dll` are included in the repo — no C compiler
+or CMake needed.
+
+### 1 — Clone and install Python deps
 
 ```powershell
 git clone https://github.com/yourname/sandcam
 cd sandcam
-.\setup-windows.ps1
+uv sync
 ```
 
-The script clones libfreenect, builds it with the bundled libusb, copies the
-DLLs next to `main.py`, and runs `uv sync`.  If it fails due to a permissions
-error on `C:\libfreenect`, re-run from an elevated (Administrator) PowerShell.
-
-Skip to [step 3 (Zadig)](#3--replace-the-kinect-usb-driver-zadig) when done.
+Skip straight to [step 3 (Zadig)](#3--replace-the-kinect-usb-driver-zadig).
 
 ---
 
-### Manual setup (if the script fails)
+### Rebuilding the DLLs (optional)
 
-#### 1a — Clone and install Python deps
+Only needed if you want to compile libfreenect yourself (e.g. a newer version
+or a different architecture).  Requires Visual Studio Build Tools and CMake:
+
+```powershell
+.\setup-windows.ps1
+```
+
+#### Manual build steps (if the script fails)
 
 ```powershell
 git clone https://github.com/yourname/sandcam
