@@ -1,4 +1,0 @@
-*.dll
-.venv/
-__pycache__/
-*.pyc

@@ -70,65 +70,7 @@ cd sandcam
 uv sync
 ```
 
-Skip straight to [step 3 (Zadig)](#3--replace-the-kinect-usb-driver-zadig).
-
----
-
-### Rebuilding the DLLs (optional)
-
-Only needed if you want to compile libfreenect yourself (e.g. a newer version
-or a different architecture).  Requires Visual Studio Build Tools and CMake:
-
-```powershell
-.\setup-windows.ps1
-```
-
-#### Manual build steps (if the script fails)
-
-```powershell
-git clone https://github.com/yourname/sandcam
-cd sandcam
-uv sync
-```
-
-#### 2 — Build libfreenect from source
-
-The `freenect` PyPI package cannot be built on Windows because its c_sync
-wrapper requires pthreads.  Instead we build `libfreenect.dll` directly and
-talk to it via ctypes — no pthreads required.
-
-```powershell
-# Clone libfreenect (includes bundled libusb-1.0 for Windows)
-git clone https://github.com/OpenKinect/libfreenect C:\Git\libfreenect
-
-# Configure — skip c_sync (pthreads) and examples; use bundled libusb
-cd C:\Git\libfreenect
-mkdir build; cd build
-
-cmake .. `
-  -DCMAKE_INSTALL_PREFIX="C:\libfreenect" `
-  -DBUILD_EXAMPLES=OFF `
-  -DBUILD_FAKENECT=OFF `
-  -DBUILD_PYTHON3=OFF `
-  -DBUILD_C_SYNC=OFF `
-  -DLIBUSB_1_INCLUDE_DIR="C:\Git\libfreenect\libusb-1.0.29\include" `
-  -DLIBUSB_1_LIBRARY="C:\Git\libfreenect\libusb-1.0.29\VS2019\MS64\dll\libusb-1.0.lib"
-
-cmake --build . --config Release
-cmake --install . --config Release
-```
-
-> **Note:** The install will fail if targeting `C:\Program Files\libfreenect`
-> due to UAC.  Use `C:\libfreenect` (no spaces, no admin needed).
-
-Copy the runtime DLLs next to `main.py`:
-
-```powershell
-copy "C:\libfreenect\lib\freenect.dll"                              C:\Git\sandcam\
-copy "C:\Git\libfreenect\libusb-1.0.29\VS2019\MS64\dll\libusb-1.0.dll"  C:\Git\sandcam\
-```
-
-### 3 — Replace the Kinect USB driver (Zadig)
+### 2 — Replace the Kinect USB driver (Zadig)
 
 The Kinect ships with an Xbox HID driver.  libfreenect needs WinUSB instead.
 
@@ -140,7 +82,7 @@ The Kinect ships with an Xbox HID driver.  libfreenect needs WinUSB instead.
 > ⚠️ This replaces the driver for this USB device only.  If you later install
 > the official Kinect SDK 1.8, you would need to re-run Zadig.
 
-### 4 — Run with hardware
+### 3 — Run with hardware
 
 In `main.py`, switch the source:
 
@@ -168,10 +110,22 @@ uv run python main.py
 
 ---
 
+### Rebuilding the DLLs (optional)
+
+Only needed if you want to recompile libfreenect (e.g. newer version or
+different architecture).  Requires Visual Studio Build Tools and CMake:
+
+```powershell
+.\setup-windows.ps1
+```
+
+Or manually — see the comments inside [setup-windows.ps1](setup-windows.ps1).
+
+---
+
 ## Linux setup (Kinect v1)
 
-On Linux, libfreenect is in the system package manager and the full `freenect`
-Python package compiles cleanly (no pthreads workaround needed).
+On Linux, libfreenect is available via the system package manager.
 
 ```bash
 # Ubuntu / Debian
@@ -188,34 +142,8 @@ uv sync
 uv run python main.py
 ```
 
-No Zadig step needed — the Linux kernel's `gspca` or generic USB driver works
-directly with libfreenect.
-
----
-
-## Docker
-
-See [Dockerfile](Dockerfile).  The container targets Linux and is useful for
-reproducible dev environments and CI.
-
-```bash
-# Build
-docker build -t sandcam .
-
-# Run with X11 display forwarding (Linux host)
-docker run --rm \
-  -e DISPLAY=$DISPLAY \
-  -v /tmp/.X11-unix:/tmp/.X11-unix \
-  --device /dev/bus/usb \
-  --privileged \
-  sandcam
-
-# Run simulator only (no Kinect, no display — headless is not supported by pygame)
-# Use X11 or Xvfb:
-docker run --rm -e DISPLAY=:99 sandcam
-```
-
-See the Dockerfile comments for Windows (WSL2) display notes.
+No Zadig step needed — the Linux kernel's generic USB driver works directly
+with libfreenect.
 
 ---
 
@@ -223,13 +151,13 @@ See the Dockerfile comments for Windows (WSL2) display notes.
 
 ```
 sandcam/
-├── main.py           Game loop, input handling, HUD
-├── depth_source.py   DepthSource ABC, MouseSimulator, KinectV1Source
-├── renderer.py       Elevation colourmap, hillshading, contour lines
-├── pyproject.toml    uv-managed dependencies (pygame, numpy, scipy)
-├── freenect.dll      libfreenect Windows runtime   ← built locally, not in git
-├── libusb-1.0.dll    libusb Windows runtime        ← built locally, not in git
-└── Dockerfile
+├── main.py             Game loop, input handling, HUD
+├── depth_source.py     DepthSource ABC, MouseSimulator, KinectV1Source
+├── renderer.py         Elevation colourmap, hillshading, contour lines
+├── pyproject.toml      uv-managed dependencies (pygame, numpy, scipy)
+├── setup-windows.ps1   Automates building libfreenect from source (optional)
+├── freenect.dll        libfreenect Windows runtime (pre-built, included)
+└── libusb-1.0.dll      libusb Windows runtime (pre-built, included)
 ```
 
 ---
