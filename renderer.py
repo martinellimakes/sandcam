@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 import pygame
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, zoom
 
 
 # ── colour maps  (normalised_height, (R, G, B)) ───────────────────────────────
@@ -92,6 +92,15 @@ class Renderer:
             self._surf = pygame.Surface(target.get_size())
 
         lut = _LUTS.get(colour_scheme, _LUTS["terrain"])
+
+        target_h = target.get_height()
+        target_w = target.get_width()
+        if height_data.shape != (target_h, target_w):
+            height_data = zoom(
+                height_data,
+                (target_h / height_data.shape[0], target_w / height_data.shape[1]),
+                order=1,
+            ).astype(np.float32)
 
         # Mild display-only smoothing
         display = gaussian_filter(height_data, sigma=1.5).astype(np.float32)
