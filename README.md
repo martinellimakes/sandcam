@@ -280,3 +280,19 @@ sandcam/
 | `scipy` | Gaussian smoothing, frame resize |
 | `opencv-contrib-python` | Optional webcam capture + ArUco marker detection |
 | libfreenect (native) | Kinect v1 USB driver + depth stream |
+
+---
+
+## Asset attribution
+
+The shark sprite sheets used by this project is based on:
+
+- `Shark Sprites - animated 4-directional` by [Sevarihk](https://opengameart.org/users/sevarihk)
+- Source: [OpenGameArt](https://opengameart.org/content/shark-sprites-animated-4-directional)
+- License: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
+
+Per the attribution request on the asset page, please keep credit to the
+original author and link back to the source page or the author's homepage when
+redistributing the shark asset or edited versions of it.
+
+---
