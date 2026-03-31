@@ -7,6 +7,10 @@ contour lines, hillshading, and colour-coded terrain that updates live.
 A **mouse-sculpting simulator** is included so you can develop and test without
 any hardware.
 
+The app also now supports an **optional webcam vision layer** for tagged toy
+interactions, plus an optional AI guide.  Both systems are independently
+disableable, so the project can always run as a plain AR sandbox.
+
 ---
 
 ## How it works
@@ -47,6 +51,107 @@ Controls:
 | `C` | Toggle contour lines |
 | `R` | Reset terrain |
 | `Esc` / `Q` | Quit |
+
+---
+
+## Optional webcam vision
+
+The webcam/object system is a second sensing layer on top of the depth-based
+sandbox.  It is fully optional:
+
+- `vision_enabled = false` keeps the app as a normal AR sandbox
+- `ai_enabled = false` keeps the app free of guide / LLM features
+- webcam object reactions work locally and do **not** require an LLM
+
+### What it does
+
+When enabled, a standard RGB webcam can detect tagged objects placed on the
+sand and trigger local sandbox interactions such as:
+
+- boat in water → ripple-style water reaction
+- boat on land → stranded event
+- dinosaur toy on land → habitat-themed reaction
+- house or tree near coast → settlement / shoreline reaction
+- volcano toy → hazard-style reaction
+
+### Setup
+
+1. Install dependencies:
+
+```powershell
+uv sync
+```
+
+This now includes `opencv-contrib-python`, which is used for ArUco marker
+detection.
+
+2. Open the settings sidebar in the app with `Tab`
+3. In the `Vision` section:
+   - turn `Vision ON`
+   - click `Scan Cameras`
+   - choose the correct webcam from `Detected Cameras`
+   - `Camera Index` still exists, but `Detected Cameras` is the preferred way to pick the right device on multi-camera systems
+   - click `Test Camera`
+4. If the camera works, turn on `Calibration Mode`
+5. Show the four calibration corner markers to the camera:
+   - `100` = top-left
+   - `101` = top-right
+   - `102` = bottom-left
+   - `103` = bottom-right
+6. Once all four are visible, calibration is stored in `sandcam-settings.json`
+
+Printable marker files are included in [calibration/](c:/Git/sandcam/calibration):
+
+- [TL-100.svg](c:/Git/sandcam/calibration/TL-100.svg)
+- [TR-101.svg](c:/Git/sandcam/calibration/TR-101.svg)
+- [BL-102.svg](c:/Git/sandcam/calibration/BL-102.svg)
+- [BR-103.svg](c:/Git/sandcam/calibration/BR-103.svg)
+
+### What you should see during calibration
+
+- before calibration is solved, the app shows a semi-transparent `Camera Preview`
+- once the four corner markers are found, it switches to a homography-warped
+  `Calibration View`
+- if `Vision Debug` is enabled, mapped marker/object positions are drawn over
+  the scene
+
+The overlay is only shown during `Calibration Mode` or `Vision Debug`, so the
+normal sandbox view stays clean during regular use.
+
+### Calibration marker IDs
+
+The calibration markers are ArUco tags with these fixed IDs:
+
+| Marker ID | Corner |
+|---|---|
+| `100` | Top-left |
+| `101` | Top-right |
+| `102` | Bottom-left |
+| `103` | Bottom-right |
+
+These are separate from the object interaction markers below.
+
+### Object marker IDs
+
+The first version uses fixed marker IDs for object types:
+
+| Marker ID | Object |
+|---|---|
+| `1` | Boat |
+| `2` | Dinosaur toy |
+| `3` | House |
+| `4` | Tree |
+| `5` | Volcano |
+
+### Notes
+
+- Vision imports are lazy at runtime, so the sandbox can still run with vision
+  disabled.
+- Calibration currently uses ArUco corner tags rather than manual point
+  clicking.
+- The webcam overlay only appears in `Calibration Mode` or `Vision Debug`.
+- `Vision Debug` draws mapped object positions over the sandbox output.
+- `Object Reactions` can be turned off while leaving the camera/debug path on.
 
 ---
 
@@ -153,8 +258,12 @@ with libfreenect.
 sandcam/
 ├── main.py             Game loop, input handling, HUD
 ├── depth_source.py     DepthSource ABC, MouseSimulator, KinectV1Source
+├── ai_guide.py         Optional guide logic and optional LLM narration
+├── webcam_observer.py  Optional webcam capture, marker tracking, calibration
+├── interaction_engine.py Local object-to-world interaction rules
 ├── renderer.py         Elevation colourmap, hillshading, contour lines
-├── pyproject.toml      uv-managed dependencies (pygame, numpy, scipy)
+├── ui.py               Sidebar settings, overlays, persisted config
+├── pyproject.toml      uv-managed dependencies
 ├── setup-windows.ps1   Automates building libfreenect from source (optional)
 ├── freenect.dll        libfreenect Windows runtime (pre-built, included)
 └── libusb-1.0.dll      libusb Windows runtime (pre-built, included)
@@ -169,4 +278,5 @@ sandcam/
 | `pygame` | Window, event loop, pixel blitting |
 | `numpy` | Height map arithmetic |
 | `scipy` | Gaussian smoothing, frame resize |
+| `opencv-contrib-python` | Optional webcam capture + ArUco marker detection |
 | libfreenect (native) | Kinect v1 USB driver + depth stream |

@@ -14,14 +14,29 @@ Esc / Q     quit
 """
 
 import sys
+import time
 
 import pygame
 
+from ai_guide import (
+    AsyncConnectionTester,
+    GuideEngine,
+    ProviderConfig,
+    TemplateNarrator,
+    build_async_narrator,
+)
 from creatures import CreatureManager
 # from depth_source import MouseSimulator
 from depth_source import KinectV1Source
+from interaction_engine import InteractionEngine
 from renderer import Renderer
-from ui import Config, Sidebar
+from ui import Config, Sidebar, draw_guide_overlay
+from webcam_observer import (
+    AsyncCameraDiscovery,
+    AsyncCameraTester,
+    CalibrationData,
+    WebcamObserver,
+)
 
 FPS           = 60
 BRUSH_MIN     = 8
@@ -157,6 +172,31 @@ def _screen_to_scene(
     return sx, sy
 
 
+def _make_guide(config: Config) -> GuideEngine | None:
+    if not config.ai_enabled:
+        return None
+
+    backend = config.llm_backend if config.llm_enabled else "template"
+    provider_config = ProviderConfig(
+        backend=backend,
+        base_url=config.llm_base_url,
+        model=config.llm_model,
+        timeout_seconds=config.llm_timeout_seconds,
+    )
+    return GuideEngine(
+        template_narrator=TemplateNarrator(),
+        async_narrator=build_async_narrator(provider_config),
+        event_cooldown=config.guide_update_seconds,
+    )
+
+
+def _make_calibration(config: Config) -> CalibrationData:
+    points = config.vision_calibration_points or []
+    if len(points) != 4:
+        return CalibrationData()
+    return CalibrationData(camera_points=tuple((float(x), float(y)) for x, y in points))
+
+
 def main() -> int:
     pygame.init()
     pygame.display.set_caption("AR Sandbox")
@@ -176,7 +216,15 @@ def main() -> int:
                               foreground_reject_mm=config.foreground_reject_mm)
     renderer = Renderer(render_w, render_h)
     creatures = CreatureManager()
+    guide = _make_guide(config)
+    vision = WebcamObserver(config.camera_index) if config.vision_enabled else None
+    calibration = _make_calibration(config)
+    interactions = InteractionEngine()
+    camera_discovery = AsyncCameraDiscovery()
+    camera_tester = AsyncCameraTester()
+    llm_tester = AsyncConnectionTester()
     sidebar  = Sidebar()
+    debug_font = pygame.font.SysFont(None, 18)
     hud_font = pygame.font.SysFont(None, 22)
     clock    = pygame.time.Clock()
 
@@ -240,6 +288,91 @@ def main() -> int:
                         foreground_reject_mm=config.foreground_reject_mm,
                     )
 
+            if config.ai_changed:
+                config.ai_changed = False
+                if guide is not None:
+                    guide.close()
+                guide = _make_guide(config)
+
+            if config.vision_changed:
+                config.vision_changed = False
+                if vision is not None:
+                    vision.close()
+                    vision = None
+                calibration = _make_calibration(config)
+                if config.vision_enabled:
+                    vision = WebcamObserver(config.camera_index)
+                    if vision.error_message:
+                        config.camera_test_status = "error"
+                        config.camera_test_message = vision.error_message
+                    elif not config.camera_test_message:
+                        config.camera_test_status = "ok"
+                        config.camera_test_message = f"Camera {config.camera_index} ready."
+                else:
+                    config.available_cameras = []
+                    config.camera_scan_status = "idle"
+                    config.camera_scan_message = ""
+                    config.camera_test_status = "idle"
+                    config.camera_test_message = ""
+                    config.calibration_message = ""
+
+            if config.llm_test_requested:
+                config.llm_test_requested = False
+                backend = config.llm_backend if config.llm_enabled else "template"
+                provider_config = ProviderConfig(
+                    backend=backend,
+                    base_url=config.llm_base_url,
+                    model=config.llm_model,
+                    timeout_seconds=config.llm_timeout_seconds,
+                )
+                started = llm_tester.start(provider_config)
+                if not started and config.llm_test_status == "running":
+                    config.llm_test_message = "A connection test is already running."
+
+            if config.camera_test_requested:
+                config.camera_test_requested = False
+                started = camera_tester.start(config.camera_index)
+                if not started and config.camera_test_status == "running":
+                    config.camera_test_message = "A camera test is already running."
+
+            if config.camera_scan_requested:
+                config.camera_scan_requested = False
+                started = camera_discovery.start()
+                if not started and config.camera_scan_status == "scanning":
+                    config.camera_scan_message = "A camera scan is already running."
+
+            llm_test_result = llm_tester.poll()
+            if llm_test_result is not None:
+                config.llm_test_status = "ok" if llm_test_result.ok else "error"
+                config.llm_test_message = llm_test_result.summary
+
+            camera_test_result = camera_tester.poll()
+            if camera_test_result is not None:
+                config.camera_test_status = "ok" if camera_test_result.ok else "error"
+                config.camera_test_message = camera_test_result.summary
+
+            camera_scan_result = camera_discovery.poll()
+            if camera_scan_result is not None:
+                config.available_cameras = [
+                    {
+                        "index": camera.index,
+                        "label": camera.summary.replace(" is working at ", "  "),
+                    }
+                    for camera in camera_scan_result
+                ]
+                if config.available_cameras:
+                    config.camera_scan_status = "ok"
+                    config.camera_scan_message = (
+                        f"Found {len(config.available_cameras)} camera(s). Select one below."
+                    )
+                    available_indexes = {int(camera["index"]) for camera in config.available_cameras}
+                    if config.camera_index not in available_indexes:
+                        config.camera_index = int(config.available_cameras[0]["index"])
+                        config.vision_changed = True
+                else:
+                    config.camera_scan_status = "error"
+                    config.camera_scan_message = "No working cameras were detected."
+
             if config.save_requested:
                 config.save_requested = False
                 config.save()
@@ -269,17 +402,109 @@ def main() -> int:
             if config.show_creatures:
                 creatures.draw(scene)
 
+            vision_events = []
+            vision_objects = []
+            if config.vision_enabled and vision is not None:
+                if config.vision_calibrating:
+                    new_calibration = vision.auto_calibrate()
+                    if new_calibration is not None:
+                        calibration = new_calibration
+                        config.vision_calibration_points = [
+                            [float(x), float(y)] for x, y in new_calibration.camera_points
+                        ]
+                        config.vision_calibrating = False
+                        config.calibration_message = "Calibration updated from corner markers."
+                        config.request_save()
+                    elif not config.calibration_message:
+                        config.calibration_message = (
+                            "Show corner tags 100, 101, 102, and 103 to calibrate the sandbox."
+                        )
+                vision_objects = vision.get_objects(calibration, (render_w, render_h), frame=frame)
+                interactions.update(
+                    vision_objects,
+                    frame,
+                    time.monotonic(),
+                    reactions_enabled=config.object_reactions_enabled,
+                )
+                if config.vision_calibrating or config.vision_debug_enabled:
+                    overlay_rgb = vision.get_warped_rgb(calibration, (render_w, render_h))
+                    overlay_label = "Calibration View"
+                    overlay_alpha = 92 if config.vision_calibrating else 64
+                    if overlay_rgb is None:
+                        overlay_rgb = vision.get_preview_rgb((render_w, render_h))
+                        overlay_label = "Camera Preview"
+                        overlay_alpha = 72 if config.vision_calibrating else 56
+                    if overlay_rgb is not None:
+                        overlay_surface = pygame.surfarray.make_surface(overlay_rgb.swapaxes(0, 1))
+                        overlay_surface.set_alpha(overlay_alpha)
+                        scene.blit(overlay_surface, (0, 0))
+                        label = debug_font.render(overlay_label, True, (255, 230, 90))
+                        shadow = debug_font.render(overlay_label, True, (0, 0, 0))
+                        scene.blit(shadow, (11, 11))
+                        scene.blit(label, (10, 10))
+                interactions.draw(scene)
+                if config.vision_debug_enabled:
+                    for kind, _camera_pos, mapped_pos in vision.debug_points(calibration, (render_w, render_h)):
+                        px, py = int(mapped_pos[0]), int(mapped_pos[1])
+                        pygame.draw.circle(scene, (255, 230, 90), (px, py), 9, 2)
+                        tag = debug_font.render(kind, True, (255, 230, 90))
+                        scene.blit(tag, (px + 8, py - 8))
+                vision_events = interactions.pop_events()
+
+            guide_message = None
+            active_challenge = None
+            if guide is not None:
+                counts = creatures.counts() if config.show_creatures else {"sharks": 0, "dinosaurs": 0}
+                guide_message = guide.update(
+                    frame,
+                    time.monotonic(),
+                    shark_count=counts["sharks"],
+                    dinosaur_count=counts["dinosaurs"],
+                    creatures_enabled=config.show_creatures,
+                    guide_enabled=config.guide_enabled,
+                    challenges_enabled=config.guide_challenges_enabled,
+                    verbosity=config.guide_verbosity,
+                )
+                active_challenge = guide.active_challenge
+                if config.guide_enabled:
+                    for vision_event in vision_events:
+                        pushed = guide.push_external_event(
+                            event_key=vision_event.event_key,
+                            title=vision_event.title,
+                            body=vision_event.body,
+                            now=time.monotonic(),
+                            verbosity=config.guide_verbosity,
+                        )
+                        if pushed is not None:
+                            guide_message = pushed
+            else:
+                vision_events.clear()
+
             if scene.get_size() == screen.get_size():
                 screen.blit(scene, (0, 0))
             else:
                 scaled = pygame.transform.scale(scene, screen.get_size())
                 screen.blit(scaled, (0, 0))
 
+            draw_guide_overlay(
+                screen,
+                config,
+                title=guide_message.title if guide_message else None,
+                body=guide_message.body if guide_message else None,
+                challenge_text=(
+                    active_challenge.prompt
+                    if (active_challenge is not None and config.guide_challenges_enabled)
+                    else None
+                ),
+                challenge_done=bool(guide_message.completed) if guide_message else False,
+            )
+
             pygame.draw.circle(screen, (255, 255, 255), (mx, my), brush_radius, 1)
 
             creatures_state = "on" if config.show_creatures else "off"
+            ai_state = "ai:on" if config.ai_enabled else "ai:off"
             hud = (f"Tab settings  C contours  G creatures:{creatures_state}  R reset  "
-                   f"brush {brush_radius}px  |  {config.colour_scheme}")
+                   f"brush {brush_radius}px  |  {config.colour_scheme}  {ai_state}")
             label = hud_font.render(hud, True, (200, 200, 200))
             screen.blit(label, (10, screen.get_height() - 24))
 
@@ -290,6 +515,28 @@ def main() -> int:
     finally:
         try:
             config.save()
+        except Exception:
+            pass
+        try:
+            if guide is not None:
+                guide.close()
+        except Exception:
+            pass
+        try:
+            camera_discovery.close()
+        except Exception:
+            pass
+        try:
+            camera_tester.close()
+        except Exception:
+            pass
+        try:
+            if vision is not None:
+                vision.close()
+        except Exception:
+            pass
+        try:
+            llm_tester.close()
         except Exception:
             pass
         try:
