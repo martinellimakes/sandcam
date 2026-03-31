@@ -215,7 +215,10 @@ def main() -> int:
                               persistence_frames=config.persistence_frames,
                               foreground_reject_mm=config.foreground_reject_mm)
     renderer = Renderer(render_w, render_h)
-    creatures = CreatureManager()
+    creatures = CreatureManager(
+        n_sharks=config.shark_count,
+        n_dinos=config.dinosaur_count,
+    )
     guide = _make_guide(config)
     vision = WebcamObserver(config.camera_index) if config.vision_enabled else None
     calibration = _make_calibration(config)
@@ -377,6 +380,11 @@ def main() -> int:
                 config.save_requested = False
                 config.save()
 
+            creatures.set_targets(
+                sharks=config.shark_count,
+                dinosaurs=config.dinosaur_count,
+            )
+
             # ── sculpt (simulator only) ───────────────────────────────────────
             buttons = pygame.mouse.get_pressed()
             mx, my  = pygame.mouse.get_pos()
@@ -400,7 +408,7 @@ def main() -> int:
                           show_contours=config.show_contours,
                           colour_scheme=config.colour_scheme)
             if config.show_creatures:
-                creatures.draw(scene)
+                creatures.draw(scene, frame)
 
             vision_events = []
             vision_objects = []

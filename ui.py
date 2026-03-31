@@ -54,6 +54,8 @@ SLIDER_SPECS = {
     "threshold": {"label": "Threshold", "lo": 5, "hi": 120, "kind": "int"},
     "persist": {"label": "Delay", "lo": 1, "hi": 12, "kind": "int"},
     "reject": {"label": "Reject", "lo": 0, "hi": 400, "kind": "int"},
+    "sharks": {"label": "Sharks", "lo": 0, "hi": 12, "kind": "int"},
+    "dinosaurs": {"label": "Dinosaurs", "lo": 0, "hi": 12, "kind": "int"},
 }
 
 
@@ -68,6 +70,8 @@ class Config:
     colour_scheme: str = "terrain"
     show_contours: bool = True
     show_creatures: bool = True
+    shark_count: int = 4
+    dinosaur_count: int = 5
     display_index: int = 0
     fullscreen: bool = False
     windowed_w: int = 900
@@ -154,6 +158,8 @@ class Config:
         config.persistence_frames = int(config.persistence_frames)
         config.foreground_reject_mm = int(config.foreground_reject_mm)
         config.display_index = max(0, int(config.display_index))
+        config.shark_count = max(0, min(12, int(config.shark_count)))
+        config.dinosaur_count = max(0, min(12, int(config.dinosaur_count)))
         config.windowed_w = max(320, int(config.windowed_w))
         config.windowed_h = max(240, int(config.windowed_h))
         config.llm_timeout_seconds = max(0.5, float(config.llm_timeout_seconds))
@@ -178,6 +184,8 @@ class Config:
             "colour_scheme": self.colour_scheme,
             "show_contours": self.show_contours,
             "show_creatures": self.show_creatures,
+            "shark_count": self.shark_count,
+            "dinosaur_count": self.dinosaur_count,
             "display_index": self.display_index,
             "fullscreen": self.fullscreen,
             "windowed_w": self.windowed_w,
@@ -519,6 +527,9 @@ class Sidebar:
         creatures_label = "Creatures ON" if config.show_creatures else "Creatures OFF"
         self._button(surface, rect, creatures_label, active=config.show_creatures)
         y += ROW + 8
+        y = self._section_header(surface, "Creatures", sx, y)
+        for key in ("sharks", "dinosaurs"):
+            y = self._draw_slider(surface, config, layout, key, ix, iw, y)
 
         y = self._section_header(surface, "AI Guide", sx, y)
         rect = pygame.Rect(ix, y, iw, ROW - 4)
@@ -773,6 +784,12 @@ class Sidebar:
             config.foreground_reject_mm = int(value)
             config.filter_changed = True
             config.request_save()
+        elif key == "sharks":
+            config.shark_count = int(value)
+            config.request_save()
+        elif key == "dinosaurs":
+            config.dinosaur_count = int(value)
+            config.request_save()
         return True
 
     def _draw_slider(
@@ -880,6 +897,8 @@ class Sidebar:
             "threshold": config.change_threshold_mm,
             "persist": config.persistence_frames,
             "reject": config.foreground_reject_mm,
+            "sharks": config.shark_count,
+            "dinosaurs": config.dinosaur_count,
         }[key]
 
     def _slider_value_text(self, key: str, value: float | int) -> str:
@@ -890,6 +909,8 @@ class Sidebar:
             "threshold": f"{int(value)} mm",
             "persist": f"{int(value)} fr",
             "reject": f"{int(value)} mm",
+            "sharks": str(int(value)),
+            "dinosaurs": str(int(value)),
         }[key]
 
     def _section_header(self, surface, label, sx, y):
