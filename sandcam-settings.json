@@ -1,0 +1,15 @@
+{
+  "change_threshold_mm": 5,
+  "colour_scheme": "terrain",
+  "display_index": 2,
+  "foreground_reject_mm": 0,
+  "fullscreen": true,
+  "max_depth_mm": 1496,
+  "min_depth_mm": 100,
+  "persistence_frames": 1,
+  "show_contours": true,
+  "show_creatures": false,
+  "temporal_alpha": 0.05,
+  "windowed_h": 650,
+  "windowed_w": 900
+}

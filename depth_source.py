@@ -123,6 +123,9 @@ class KinectV1Source(DepthSource):
     _RESOLUTION_MEDIUM = 1   # 640 × 480
     _DEPTH_11BIT       = 0   # uint16, values 0–2047 mm
     _DEPTH_RAW_NO_DATA = 2047
+    _DEVICE_CAMERA     = 0x02
+    _LOG_FATAL         = 0
+    _LOG_ERROR         = 1
 
     def __init__(
         self,
@@ -131,6 +134,11 @@ class KinectV1Source(DepthSource):
         min_depth_mm: int = 400,
         max_depth_mm: int = 1100,
         device_index: int = 0,
+        temporal_alpha: float = 0.35,
+        change_threshold_mm: int = 35,
+        persistence_frames: int = 4,
+        foreground_reject_mm: int = 120,
+        quiet_native_logs: bool = True,
     ) -> None:
         self._out_width  = width
         self._out_height = height
@@ -195,6 +203,13 @@ class KinectV1Source(DepthSource):
         ]
         lib.freenect_shutdown.restype  = ctypes.c_int
         lib.freenect_shutdown.argtypes = [ctypes.c_void_p]
+        lib.freenect_set_log_level.restype = None
+        lib.freenect_set_log_level.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        _LogCB = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p)
+        lib.freenect_set_log_callback.restype = None
+        lib.freenect_set_log_callback.argtypes = [ctypes.c_void_p, _LogCB]
+        lib.freenect_select_subdevices.restype = None
+        lib.freenect_select_subdevices.argtypes = [ctypes.c_void_p, ctypes.c_int]
 
         lib.freenect_open_device.restype  = ctypes.c_int
         lib.freenect_open_device.argtypes = [
@@ -228,6 +243,9 @@ class KinectV1Source(DepthSource):
         if lib.freenect_init(ctypes.byref(ctx), None) != 0:
             raise RuntimeError("freenect_init failed")
 
+        # We only need depth/video from the camera block, not motor/audio.
+        lib.freenect_select_subdevices(ctx, self._DEVICE_CAMERA)
+
         dev = ctypes.c_void_p()
         if lib.freenect_open_device(ctx, ctypes.byref(dev), device_index) != 0:
             lib.freenect_shutdown(ctx)
@@ -250,6 +268,22 @@ class KinectV1Source(DepthSource):
         self._running = True
         self._lock    = threading.Lock()
         self._latest  = np.full((height, width), 0.5, dtype=np.float32)
+        self._temporal_alpha = float(np.clip(temporal_alpha, 0.01, 1.0))
+        self._change_threshold_mm = float(max(1, change_threshold_mm))
+        self._persistence_frames = max(1, int(persistence_frames))
+        self._foreground_reject_mm = float(max(0, foreground_reject_mm))
+        self._stable_raw: np.ndarray | None = None
+        self._candidate_raw: np.ndarray | None = None
+        self._candidate_age: np.ndarray | None = None
+        self._log_cb = None
+        self._closed = False
+
+        if quiet_native_logs:
+            self._log_cb = _LogCB(lambda _device, _level, _msg: None)
+            lib.freenect_set_log_level(ctx, self._LOG_FATAL)
+            lib.freenect_set_log_callback(ctx, self._log_cb)
+        else:
+            lib.freenect_set_log_level(ctx, self._LOG_ERROR)
 
         # Hold a Python reference to the callback so the GC doesn't collect it
         self._cb = _DepthCB(self._on_depth)
@@ -275,6 +309,10 @@ class KinectV1Source(DepthSource):
             out_w = self._out_width
             min_  = self._min
             max_  = self._max
+            alpha = self._temporal_alpha
+            threshold = self._change_threshold_mm
+            persistence = self._persistence_frames
+            reject_margin = self._foreground_reject_mm
 
         import ctypes
         raw = np.frombuffer(
@@ -282,10 +320,56 @@ class KinectV1Source(DepthSource):
             dtype=np.uint16,
         ).reshape(480, 640).copy().astype(np.float32)
 
-        raw[(raw == 0) | (raw >= self._DEPTH_RAW_NO_DATA)] = max_
+        if (
+            self._stable_raw is None
+            or self._candidate_raw is None
+            or self._candidate_age is None
+        ):
+            baseline = raw.copy()
+            baseline[(baseline == 0) | (baseline >= self._DEPTH_RAW_NO_DATA)] = max_
+            self._stable_raw = baseline
+            self._candidate_raw = baseline.copy()
+            self._candidate_age = np.zeros_like(baseline, dtype=np.uint8)
+
+        stable_raw = self._stable_raw
+        candidate_raw = self._candidate_raw
+        candidate_age = self._candidate_age
+
+        invalid = (raw == 0) | (raw >= self._DEPTH_RAW_NO_DATA)
+        foreground = raw < max(1.0, min_ - reject_margin)
+        raw[invalid | foreground] = stable_raw[invalid | foreground]
+
+        delta = np.abs(raw - stable_raw)
+        settled = delta <= threshold
+        changed = ~settled
+
+        if np.any(settled):
+            stable_raw[settled] = (
+                stable_raw[settled] * (1.0 - alpha) + raw[settled] * alpha
+            )
+            candidate_age[settled] = 0
+
+        if np.any(changed):
+            same_candidate = np.abs(raw - candidate_raw) <= threshold
+            refresh = changed & ~same_candidate
+            if np.any(refresh):
+                candidate_raw[refresh] = raw[refresh]
+                candidate_age[refresh] = 1
+
+            persist = changed & same_candidate
+            if np.any(persist):
+                candidate_age[persist] = np.minimum(candidate_age[persist] + 1, 255)
+
+            confirmed = changed & (candidate_age >= persistence)
+            if np.any(confirmed):
+                stable_raw[confirmed] = (
+                    stable_raw[confirmed] * (1.0 - alpha)
+                    + candidate_raw[confirmed] * alpha
+                )
+                candidate_age[confirmed] = 0
 
         frame = np.clip(
-            1.0 - (raw - min_) / (max_ - min_),
+            1.0 - (stable_raw - min_) / (max_ - min_),
             0.0, 1.0,
         ).astype(np.float32)
 
@@ -298,7 +382,9 @@ class KinectV1Source(DepthSource):
 
     def _event_loop(self) -> None:
         while self._running:
-            self._lib.freenect_process_events(self._ctx)
+            rc = self._lib.freenect_process_events(self._ctx)
+            if rc < 0:
+                break
 
     # ------------------------------------------------------------------
     # Public API
@@ -314,6 +400,21 @@ class KinectV1Source(DepthSource):
             self._min = float(min_mm)
             self._max = float(max_mm)
 
+    def set_filter_params(
+        self,
+        *,
+        temporal_alpha: float,
+        change_threshold_mm: int,
+        persistence_frames: int,
+        foreground_reject_mm: int,
+    ) -> None:
+        """Update live temporal filtering settings from the sidebar."""
+        with self._lock:
+            self._temporal_alpha = float(np.clip(temporal_alpha, 0.01, 1.0))
+            self._change_threshold_mm = float(max(1, change_threshold_mm))
+            self._persistence_frames = max(1, int(persistence_frames))
+            self._foreground_reject_mm = float(max(0, foreground_reject_mm))
+
     def resize(self, width: int, height: int) -> None:
         """Update output frame size (e.g. after a fullscreen display change)."""
         with self._lock:
@@ -323,11 +424,31 @@ class KinectV1Source(DepthSource):
 
     def close(self) -> None:
         """Stop the Kinect and release resources."""
+        if self._closed:
+            return
+        self._closed = True
         self._running = False
-        self._thread.join(timeout=2.0)
-        self._lib.freenect_stop_depth(self._dev)
-        self._lib.freenect_close_device(self._dev)
-        self._lib.freenect_shutdown(self._ctx)
+        try:
+            if self._dev:
+                self._lib.freenect_stop_depth(self._dev)
+        except Exception:
+            pass
+        try:
+            if self._dev:
+                self._lib.freenect_close_device(self._dev)
+        except Exception:
+            pass
+        try:
+            if self._ctx:
+                self._lib.freenect_shutdown(self._ctx)
+        except Exception:
+            pass
+
+        if self._thread.is_alive():
+            self._thread.join(timeout=1.0)
+
+        self._dev = None
+        self._ctx = None
 
     def __enter__(self) -> KinectV1Source:
         return self
