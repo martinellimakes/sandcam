@@ -641,6 +641,15 @@ class CreatureManager:
                 counts["dinosaurs"] += 1
         return counts
 
+    def counts(self) -> dict[str, int]:
+        counts = {"sharks": 0, "dinosaurs": 0}
+        for creature in self._creatures:
+            if isinstance(creature, Shark):
+                counts["sharks"] += 1
+            elif isinstance(creature, Dinosaur):
+                counts["dinosaurs"] += 1
+        return counts
+
     def _spawn_missing(self, frame: np.ndarray, w: int, h: int) -> None:
         counts = {cls: 0 for cls in self._targets}
         for creature in self._creatures:

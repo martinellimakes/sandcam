@@ -488,6 +488,84 @@ def main() -> int:
             else:
                 vision_events.clear()
 
+            vision_events = []
+            vision_objects = []
+            if config.vision_enabled and vision is not None:
+                if config.vision_calibrating:
+                    new_calibration = vision.auto_calibrate()
+                    if new_calibration is not None:
+                        calibration = new_calibration
+                        config.vision_calibration_points = [
+                            [float(x), float(y)] for x, y in new_calibration.camera_points
+                        ]
+                        config.vision_calibrating = False
+                        config.calibration_message = "Calibration updated from corner markers."
+                        config.request_save()
+                    elif not config.calibration_message:
+                        config.calibration_message = (
+                            "Show corner tags 100, 101, 102, and 103 to calibrate the sandbox."
+                        )
+                vision_objects = vision.get_objects(calibration, (render_w, render_h), frame=frame)
+                interactions.update(
+                    vision_objects,
+                    frame,
+                    time.monotonic(),
+                    reactions_enabled=config.object_reactions_enabled,
+                )
+                if config.vision_calibrating or config.vision_debug_enabled:
+                    overlay_rgb = vision.get_warped_rgb(calibration, (render_w, render_h))
+                    overlay_label = "Calibration View"
+                    overlay_alpha = 92 if config.vision_calibrating else 64
+                    if overlay_rgb is None:
+                        overlay_rgb = vision.get_preview_rgb((render_w, render_h))
+                        overlay_label = "Camera Preview"
+                        overlay_alpha = 72 if config.vision_calibrating else 56
+                    if overlay_rgb is not None:
+                        overlay_surface = pygame.surfarray.make_surface(overlay_rgb.swapaxes(0, 1))
+                        overlay_surface.set_alpha(overlay_alpha)
+                        scene.blit(overlay_surface, (0, 0))
+                        label = debug_font.render(overlay_label, True, (255, 230, 90))
+                        shadow = debug_font.render(overlay_label, True, (0, 0, 0))
+                        scene.blit(shadow, (11, 11))
+                        scene.blit(label, (10, 10))
+                interactions.draw(scene)
+                if config.vision_debug_enabled:
+                    for kind, _camera_pos, mapped_pos in vision.debug_points(calibration, (render_w, render_h)):
+                        px, py = int(mapped_pos[0]), int(mapped_pos[1])
+                        pygame.draw.circle(scene, (255, 230, 90), (px, py), 9, 2)
+                        tag = debug_font.render(kind, True, (255, 230, 90))
+                        scene.blit(tag, (px + 8, py - 8))
+                vision_events = interactions.pop_events()
+
+            guide_message = None
+            active_challenge = None
+            if guide is not None:
+                counts = creatures.counts() if config.show_creatures else {"sharks": 0, "dinosaurs": 0}
+                guide_message = guide.update(
+                    frame,
+                    time.monotonic(),
+                    shark_count=counts["sharks"],
+                    dinosaur_count=counts["dinosaurs"],
+                    creatures_enabled=config.show_creatures,
+                    guide_enabled=config.guide_enabled,
+                    challenges_enabled=config.guide_challenges_enabled,
+                    verbosity=config.guide_verbosity,
+                )
+                active_challenge = guide.active_challenge
+                if config.guide_enabled:
+                    for vision_event in vision_events:
+                        pushed = guide.push_external_event(
+                            event_key=vision_event.event_key,
+                            title=vision_event.title,
+                            body=vision_event.body,
+                            now=time.monotonic(),
+                            verbosity=config.guide_verbosity,
+                        )
+                        if pushed is not None:
+                            guide_message = pushed
+            else:
+                vision_events.clear()
+
             if scene.get_size() == screen.get_size():
                 screen.blit(scene, (0, 0))
             else:
