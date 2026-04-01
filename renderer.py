@@ -78,6 +78,13 @@ _LUTS = {name: _build_lut(cm) for name, cm in _COLORMAPS.items()}
 class Renderer:
     def __init__(self, width: int, height: int) -> None:
         self._surf = pygame.Surface((width, height))
+        self._resize_buffers(width, height)
+
+    def _resize_buffers(self, width: int, height: int) -> None:
+        self._display = np.empty((height, width), dtype=np.float32)
+        self._work = np.empty((height, width), dtype=np.float32)
+        self._indices = np.empty((height, width), dtype=np.uint8)
+        self._rgb = np.empty((height, width, 3), dtype=np.uint8)
 
     def draw(
         self,
@@ -90,6 +97,7 @@ class Renderer:
         # Recreate internal surface if window was resized
         if self._surf.get_size() != target.get_size():
             self._surf = pygame.Surface(target.get_size())
+            self._resize_buffers(*target.get_size())
 
         lut = _LUTS.get(colour_scheme, _LUTS["terrain"])
 
@@ -103,28 +111,30 @@ class Renderer:
             ).astype(np.float32)
 
         # Mild display-only smoothing
-        display = gaussian_filter(height_data, sigma=1.5).astype(np.float32)
+        gaussian_filter(height_data, sigma=1.5, output=self._display, mode="nearest")
 
         # Base colour from LUT
-        indices = (np.clip(display, 0.0, 1.0) * 255).astype(np.uint8)
-        rgb = lut[indices].copy()
+        np.multiply(self._display, 255.0, out=self._work)
+        np.clip(self._work, 0.0, 255.0, out=self._work)
+        self._indices[...] = self._work
+        self._rgb[...] = lut[self._indices]
 
         # Hillshading — NW light source
-        dy, dx = np.gradient(display)
+        dy, dx = np.gradient(self._display)
         shade = np.clip(1.0 - 0.6 * dy + 0.2 * dx, 0.5, 1.3).astype(np.float32)
-        rgb = np.clip(rgb * shade[:, :, np.newaxis], 0, 255).astype(np.uint8)
+        self._rgb[...] = np.clip(self._rgb * shade[:, :, np.newaxis], 0, 255).astype(np.uint8)
 
         # Contour lines (above waterline only)
         if show_contours:
-            above_water = display >= WATER_LEVEL
-            quantized   = (display / CONTOUR_INTERVAL).astype(np.int32)
+            above_water = self._display >= WATER_LEVEL
+            quantized   = (self._display / CONTOUR_INTERVAL).astype(np.int32)
             contour = (
                 (quantized != np.roll(quantized, 1, axis=0)) |
                 (quantized != np.roll(quantized, 1, axis=1))
             )
             contour &= above_water
-            rgb[contour] = (rgb[contour] * 0.35).astype(np.uint8)
+            self._rgb[contour] = (self._rgb[contour] * 0.35).astype(np.uint8)
 
         # pygame surfarray is (W, H, 3) — transpose from numpy's (H, W, 3)
-        pygame.surfarray.blit_array(self._surf, rgb.transpose(1, 0, 2))
+        pygame.surfarray.blit_array(self._surf, self._rgb.transpose(1, 0, 2))
         target.blit(self._surf, (0, 0))

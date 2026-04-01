@@ -37,7 +37,7 @@ _SUCCESS    = (90, 180, 120)
 SIDEBAR_W   = 310
 PAD         = 14
 ROW         = 30
-ANIM_SPEED  = 28
+ANIM_SPEED  = 1680.0
 
 SCHEMES = ["terrain", "heat", "greyscale", "desert"]
 VERBOSITIES = ["quiet", "normal", "lively"]
@@ -47,6 +47,7 @@ LLM_BACKENDS = [
     ("cloud_openai_compatible", "Cloud"),
 ]
 CONFIG_PATH = pathlib.Path(__file__).with_name("sandcam-settings.json")
+_GUIDE_FONTS: tuple[pygame.font.Font, pygame.font.Font, pygame.font.Font] | None = None
 SLIDER_SPECS = {
     "min": {"label": "Min", "lo": 100, "hi": 2000, "kind": "int"},
     "max": {"label": "Max", "lo": 200, "hi": 3000, "kind": "int"},
@@ -258,6 +259,8 @@ class Sidebar:
         self._text_input: str | None = None
         self._font_sm: pygame.font.Font | None = None
         self._font_md: pygame.font.Font | None = None
+        self._text_cache: dict[tuple[str, str, tuple[int, ...]], pygame.Surface] = {}
+        self._bg_cache: dict[int, pygame.Surface] = {}
 
     def toggle(self) -> None:
         self._open = not self._open
@@ -446,12 +449,13 @@ class Sidebar:
 
         return False
 
-    def update(self) -> None:
+    def update(self, dt: float) -> None:
         target = 0 if self._open else SIDEBAR_W
+        step = ANIM_SPEED * max(0.0, dt)
         if self._offset < target:
-            self._offset = min(self._offset + ANIM_SPEED, target)
+            self._offset = min(self._offset + step, target)
         elif self._offset > target:
-            self._offset = max(self._offset - ANIM_SPEED, target)
+            self._offset = max(self._offset - step, target)
 
     def draw(self, surface: pygame.Surface, config: Config) -> None:
         if self._offset >= SIDEBAR_W:
@@ -467,8 +471,11 @@ class Sidebar:
 
         surface.set_clip(pygame.Rect(sx, 0, SIDEBAR_W, sh))
 
-        bg = pygame.Surface((SIDEBAR_W, sh), pygame.SRCALPHA)
-        bg.fill((*_BG, 225))
+        bg = self._bg_cache.get(sh)
+        if bg is None:
+            bg = pygame.Surface((SIDEBAR_W, sh), pygame.SRCALPHA)
+            bg.fill((*_BG, 225))
+            self._bg_cache[sh] = bg
         surface.blit(bg, (sx, 0))
         pygame.draw.line(surface, _DIVIDER, (sx, 0), (sx, sh))
 
@@ -941,12 +948,13 @@ class Sidebar:
         pygame.draw.rect(surface, _SCROLL_BAR, thumb, border_radius=2)
 
     def _label(self, surface, text, x, y, align_right=False):
-        lbl = self._font_sm.render(text, True, _SUBTEXT)
+        lbl = self._render_cached("sm", text, _SUBTEXT)
         blit_x = (x - lbl.get_width()) if align_right else x
         surface.blit(lbl, (blit_x, y))
 
     def _text(self, surface, text, x, y, font, colour):
-        surface.blit(font.render(text, True, colour), (x, y))
+        font_key = "md" if font is self._font_md else "sm"
+        surface.blit(self._render_cached(font_key, text, colour), (x, y))
 
     def _slider(self, surface, track: pygame.Rect, val: float, lo: float, hi: float):
         t = (val - lo) / (hi - lo)
@@ -963,8 +971,24 @@ class Sidebar:
         hover = rect.collidepoint(mx, my)
         colour = _BTN_ACT if active else (_BTN_HOV if hover else _BTN)
         pygame.draw.rect(surface, colour, rect, border_radius=4)
-        txt = self._font_sm.render(label, True, _TEXT)
+        txt = self._render_cached("sm", label, _TEXT)
         surface.blit(txt, txt.get_rect(center=rect.center))
+
+    def _render_cached(
+        self,
+        font_key: str,
+        text: str,
+        colour: tuple[int, ...],
+    ) -> pygame.Surface:
+        key = (font_key, text, tuple(colour))
+        cached = self._text_cache.get(key)
+        if cached is not None:
+            return cached
+        font = self._font_md if font_key == "md" else self._font_sm
+        assert font is not None
+        rendered = font.render(text, True, colour)
+        self._text_cache[key] = rendered
+        return rendered
 
 
 def draw_guide_overlay(
@@ -979,9 +1003,14 @@ def draw_guide_overlay(
     if not (config.ai_enabled and config.guide_enabled and title and body):
         return
 
-    title_font = pygame.font.SysFont("segoeui", 19, bold=True)
-    body_font = pygame.font.SysFont("segoeui", 16)
-    label_font = pygame.font.SysFont("segoeui", 13, bold=True)
+    global _GUIDE_FONTS
+    if _GUIDE_FONTS is None:
+        _GUIDE_FONTS = (
+            pygame.font.SysFont("segoeui", 19, bold=True),
+            pygame.font.SysFont("segoeui", 16),
+            pygame.font.SysFont("segoeui", 13, bold=True),
+        )
+    title_font, body_font, label_font = _GUIDE_FONTS
 
     width = min(380, max(260, surface.get_width() // 3))
     x = 18

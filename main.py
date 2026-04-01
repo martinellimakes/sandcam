@@ -47,6 +47,97 @@ MAX_RENDER_W  = 960
 MAX_RENDER_H  = 720
 
 
+def _draw_startup_screen(
+    screen: pygame.Surface,
+    *,
+    title: str,
+    message: str,
+    progress: float,
+) -> None:
+    progress = max(0.0, min(1.0, progress))
+    screen.fill((14, 18, 26))
+
+    title_font = pygame.font.SysFont("segoeui", 30, bold=True)
+    body_font = pygame.font.SysFont("segoeui", 18)
+    small_font = pygame.font.SysFont("segoeui", 14)
+
+    panel_w = min(520, screen.get_width() - 80)
+    panel_h = 170
+    panel = pygame.Rect(
+        (screen.get_width() - panel_w) // 2,
+        (screen.get_height() - panel_h) // 2,
+        panel_w,
+        panel_h,
+    )
+
+    card = pygame.Surface(panel.size, pygame.SRCALPHA)
+    pygame.draw.rect(card, (22, 28, 40, 238), card.get_rect(), border_radius=16)
+    pygame.draw.rect(card, (72, 124, 188), card.get_rect(), width=2, border_radius=16)
+    screen.blit(card, panel.topleft)
+
+    screen.blit(title_font.render(title, True, (220, 228, 238)), (panel.x + 20, panel.y + 18))
+    screen.blit(body_font.render(message, True, (170, 182, 198)), (panel.x + 20, panel.y + 66))
+
+    track = pygame.Rect(panel.x + 20, panel.y + 110, panel_w - 40, 12)
+    fill = pygame.Rect(track.x, track.y, int(track.width * progress), track.height)
+    pygame.draw.rect(screen, (44, 52, 72), track, border_radius=6)
+    if fill.width > 0:
+        pygame.draw.rect(screen, (60, 130, 210), fill, border_radius=6)
+
+    percent = small_font.render(f"{int(progress * 100):d}%", True, (120, 132, 150))
+    screen.blit(percent, (track.right - percent.get_width(), track.bottom + 10))
+    pygame.display.flip()
+
+
+def _pump_startup_events() -> bool:
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            return False
+    return True
+
+
+def _prewarm_creatures(screen: pygame.Surface) -> bool:
+    stages = 2
+    current_stage = 0
+    cancelled = False
+
+    def _progress(stage_label: str, index: int, total: int, _scale: float) -> bool:
+        nonlocal cancelled
+        if not _pump_startup_events():
+            cancelled = True
+            return False
+        fraction = (current_stage + (index / max(1, total))) / stages
+        _draw_startup_screen(
+            screen,
+            title="Loading Sandbox",
+            message=f"Preparing {stage_label.lower()} sprites...",
+            progress=fraction,
+        )
+        return True
+
+    _draw_startup_screen(
+        screen,
+        title="Loading Sandbox",
+        message="Preparing creature sprites...",
+        progress=0.0,
+    )
+    if not _pump_startup_events():
+        return False
+
+    current_stage = 0
+    if CreatureManager.prewarm_assets(progress=_progress) is False:
+        return False
+
+    current_stage = 1
+    _draw_startup_screen(
+        screen,
+        title="Loading Sandbox",
+        message="Creature sprites are ready.",
+        progress=1.0,
+    )
+    return not cancelled
+
+
 def _fallback_display_bounds() -> list[tuple[int, int, int, int]]:
     x = 0
     bounds: list[tuple[int, int, int, int]] = []
@@ -203,6 +294,9 @@ def main() -> int:
 
     config  = Config.load()
     screen, screen_w, screen_h = _make_display(config)
+    if not _prewarm_creatures(screen):
+        pygame.quit()
+        return 0
     render_w, render_h = _compute_render_size(screen_w, screen_h)
     scene = pygame.Surface((render_w, render_h))
 
@@ -488,84 +582,6 @@ def main() -> int:
             else:
                 vision_events.clear()
 
-            vision_events = []
-            vision_objects = []
-            if config.vision_enabled and vision is not None:
-                if config.vision_calibrating:
-                    new_calibration = vision.auto_calibrate()
-                    if new_calibration is not None:
-                        calibration = new_calibration
-                        config.vision_calibration_points = [
-                            [float(x), float(y)] for x, y in new_calibration.camera_points
-                        ]
-                        config.vision_calibrating = False
-                        config.calibration_message = "Calibration updated from corner markers."
-                        config.request_save()
-                    elif not config.calibration_message:
-                        config.calibration_message = (
-                            "Show corner tags 100, 101, 102, and 103 to calibrate the sandbox."
-                        )
-                vision_objects = vision.get_objects(calibration, (render_w, render_h), frame=frame)
-                interactions.update(
-                    vision_objects,
-                    frame,
-                    time.monotonic(),
-                    reactions_enabled=config.object_reactions_enabled,
-                )
-                if config.vision_calibrating or config.vision_debug_enabled:
-                    overlay_rgb = vision.get_warped_rgb(calibration, (render_w, render_h))
-                    overlay_label = "Calibration View"
-                    overlay_alpha = 92 if config.vision_calibrating else 64
-                    if overlay_rgb is None:
-                        overlay_rgb = vision.get_preview_rgb((render_w, render_h))
-                        overlay_label = "Camera Preview"
-                        overlay_alpha = 72 if config.vision_calibrating else 56
-                    if overlay_rgb is not None:
-                        overlay_surface = pygame.surfarray.make_surface(overlay_rgb.swapaxes(0, 1))
-                        overlay_surface.set_alpha(overlay_alpha)
-                        scene.blit(overlay_surface, (0, 0))
-                        label = debug_font.render(overlay_label, True, (255, 230, 90))
-                        shadow = debug_font.render(overlay_label, True, (0, 0, 0))
-                        scene.blit(shadow, (11, 11))
-                        scene.blit(label, (10, 10))
-                interactions.draw(scene)
-                if config.vision_debug_enabled:
-                    for kind, _camera_pos, mapped_pos in vision.debug_points(calibration, (render_w, render_h)):
-                        px, py = int(mapped_pos[0]), int(mapped_pos[1])
-                        pygame.draw.circle(scene, (255, 230, 90), (px, py), 9, 2)
-                        tag = debug_font.render(kind, True, (255, 230, 90))
-                        scene.blit(tag, (px + 8, py - 8))
-                vision_events = interactions.pop_events()
-
-            guide_message = None
-            active_challenge = None
-            if guide is not None:
-                counts = creatures.counts() if config.show_creatures else {"sharks": 0, "dinosaurs": 0}
-                guide_message = guide.update(
-                    frame,
-                    time.monotonic(),
-                    shark_count=counts["sharks"],
-                    dinosaur_count=counts["dinosaurs"],
-                    creatures_enabled=config.show_creatures,
-                    guide_enabled=config.guide_enabled,
-                    challenges_enabled=config.guide_challenges_enabled,
-                    verbosity=config.guide_verbosity,
-                )
-                active_challenge = guide.active_challenge
-                if config.guide_enabled:
-                    for vision_event in vision_events:
-                        pushed = guide.push_external_event(
-                            event_key=vision_event.event_key,
-                            title=vision_event.title,
-                            body=vision_event.body,
-                            now=time.monotonic(),
-                            verbosity=config.guide_verbosity,
-                        )
-                        if pushed is not None:
-                            guide_message = pushed
-            else:
-                vision_events.clear()
-
             if scene.get_size() == screen.get_size():
                 screen.blit(scene, (0, 0))
             else:
@@ -594,7 +610,7 @@ def main() -> int:
             label = hud_font.render(hud, True, (200, 200, 200))
             screen.blit(label, (10, screen.get_height() - 24))
 
-            sidebar.update()
+            sidebar.update(dt)
             sidebar.draw(screen, config)
 
             pygame.display.flip()
