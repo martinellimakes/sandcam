@@ -17,6 +17,8 @@ from typing import Any
 
 import numpy as np
 
+from cv_detector import CVDetectionLayer, CVRawTrack  # noqa: F401 — re-exported
+
 CORNER_MARKER_IDS = {
     100: "top_left",
     101: "top_right",
@@ -77,6 +79,19 @@ class VisionEvent:
     title: str
     body: str
     sandbox_pos: tuple[float, float]
+
+
+@dataclass(frozen=True)
+class CVTrackedObject:
+    """CV-detected object mapped into sandbox space.  Produced by WebcamObserver.get_cv_objects()."""
+    track_id: int
+    label: str
+    confidence: float
+    bbox: tuple[int, int, int, int]  # x1, y1, x2, y2 in camera pixels
+    camera_pos: tuple[float, float]
+    sandbox_pos: tuple[float, float]
+    biome: str
+    stable_for_seconds: float
 
 
 @dataclass
@@ -349,6 +364,7 @@ class WebcamObserver:
         self._error_message = ""
         self._backend_index: int | None = None
         self._backend_name: str | None = None
+        self._cv_layer: CVDetectionLayer | None = None
 
         if self._cv2 is None:
             self._error_message = "OpenCV is not installed."
@@ -392,6 +408,9 @@ class WebcamObserver:
             self._capture.release()
         self._capture = None
         self._backend_name = None
+        if self._cv_layer is not None:
+            self._cv_layer.close()
+            self._cv_layer = None
 
     def _loop(self) -> None:
         assert self._cv2 is not None
@@ -424,6 +443,8 @@ class WebcamObserver:
             with self._lock:
                 self._latest_frame = frame
                 self._update_tracks(detections, now)
+            if self._cv_layer is not None:
+                self._cv_layer.submit_frame(frame)
 
     def _detect_markers(self, frame: np.ndarray) -> list[tuple[int, tuple[float, float], tuple[tuple[float, float], ...]]]:
         assert self._cv2 is not None
@@ -492,6 +513,46 @@ class WebcamObserver:
         stale = [marker_id for marker_id, marker in self._tracked.items() if marker_id not in seen and now - marker.last_seen > 0.75]
         for marker_id in stale:
             self._tracked.pop(marker_id, None)
+
+    def get_latest_frame(self) -> "np.ndarray | None":
+        with self._lock:
+            return self._latest_frame.copy() if self._latest_frame is not None else None
+
+    def set_cv_layer(self, layer: CVDetectionLayer | None) -> None:
+        """Attach or detach a CVDetectionLayer.  Thread-safe: safe to call any time."""
+        self._cv_layer = layer
+
+    def get_cv_objects(
+        self,
+        calibration: CalibrationData,
+        scene_size: tuple[int, int],
+        *,
+        frame: np.ndarray | None = None,
+        min_stable_seconds: float = 0.3,
+    ) -> list[CVTrackedObject]:
+        """Return CV-detected objects mapped into sandbox space."""
+        if self._cv_layer is None:
+            return []
+        now = time.monotonic()
+        raw_tracks = self._cv_layer.get_raw_tracks()
+        objects: list[CVTrackedObject] = []
+        for track in raw_tracks:
+            stable_for = now - track.stable_since
+            if stable_for < min_stable_seconds:
+                continue
+            sandbox_pos = map_camera_to_sandbox(track.camera_pos, calibration, scene_size)
+            biome = _sample_biome(frame, sandbox_pos) if frame is not None else "unknown"
+            objects.append(CVTrackedObject(
+                track_id=track.track_id,
+                label=track.label,
+                confidence=track.confidence,
+                bbox=track.bbox,
+                camera_pos=track.camera_pos,
+                sandbox_pos=sandbox_pos,
+                biome=biome,
+                stable_for_seconds=stable_for,
+            ))
+        return objects
 
     def auto_calibrate(self) -> CalibrationData | None:
         with self._lock:

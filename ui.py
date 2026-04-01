@@ -46,6 +46,10 @@ LLM_BACKENDS = [
     ("local_openai_compatible", "Local"),
     ("cloud_openai_compatible", "Cloud"),
 ]
+CV_BACKENDS = [
+    ("yolo", "YOLO"),
+    ("openai_vision", "Vision API"),
+]
 CONFIG_PATH = pathlib.Path(__file__).with_name("sandcam-settings.json")
 _GUIDE_FONTS: tuple[pygame.font.Font, pygame.font.Font, pygame.font.Font] | None = None
 SLIDER_SPECS = {
@@ -57,6 +61,7 @@ SLIDER_SPECS = {
     "reject": {"label": "Reject", "lo": 0, "hi": 400, "kind": "int"},
     "sharks": {"label": "Sharks", "lo": 0, "hi": 12, "kind": "int"},
     "dinosaurs": {"label": "Dinosaurs", "lo": 0, "hi": 12, "kind": "int"},
+    "cv_confidence": {"label": "Min Confidence", "lo": 0.1, "hi": 1.0, "kind": "float"},
 }
 
 
@@ -94,11 +99,33 @@ class Config:
     vision_debug_enabled: bool = False
     vision_calibration_points: list[list[float]] | None = None
     vision_calibrating: bool = False
+    # ── CV object detection ───────────────────────────────────────────────────
+    cv_detection_enabled: bool = False
+    cv_detection_backend: str = "yolo"       # "yolo" | "openai_vision"
+    cv_detection_model: str = "yolo11n.pt"   # YOLO model file
+    cv_detection_confidence: float = 0.5
+    cv_detection_api_url: str = ""           # vision API base URL (openai_vision)
+    cv_detection_api_key: str = ""           # vision API key
+    cv_detection_api_model: str = ""         # vision model name
+    cv_llm_interactions_enabled: bool = True
+    cv_ignore_labels: str = "person,hand,hands,head,face,arm,finger"
+    cv_detection_status: str = ""            # transient: error / info message
+    # ── CV training mode ─────────────────────────────────────────────────────
+    cv_training_mode: bool = False
+    cv_capture_requested: bool = False       # transient
+    cv_capture_status: str = ""              # transient: "Identifying..." / "Found: red car"
+    cv_capture_label: str = ""              # transient: pending label before save
+    cv_capture_description: str = ""        # transient: pending description before save
+    cv_capture_thumbnail_b64: str = ""      # transient
+    cv_capture_save_requested: bool = False  # transient
+    cv_custom_objects: list = None           # transient: loaded from store for display  # type: ignore[assignment]
+    # ── transient flags ───────────────────────────────────────────────────────
     display_changed: bool = False
     depth_range_changed: bool = False
     filter_changed: bool = False
     ai_changed: bool = False
     vision_changed: bool = False
+    cv_detection_changed: bool = False
     camera_scan_requested: bool = False
     camera_scan_status: str = "idle"
     camera_scan_message: str = ""
@@ -128,6 +155,15 @@ class Config:
             "filter_changed",
             "ai_changed",
             "vision_changed",
+            "cv_detection_changed",
+            "cv_detection_status",
+            "cv_capture_requested",
+            "cv_capture_status",
+            "cv_capture_label",
+            "cv_capture_description",
+            "cv_capture_thumbnail_b64",
+            "cv_capture_save_requested",
+            "cv_custom_objects",
             "available_cameras",
             "camera_scan_requested",
             "camera_scan_status",
@@ -151,6 +187,8 @@ class Config:
             config.guide_verbosity = "normal"
         if config.llm_backend not in {backend for backend, _ in LLM_BACKENDS}:
             config.llm_backend = "template"
+        if config.cv_detection_backend not in {b for b, _ in CV_BACKENDS}:
+            config.cv_detection_backend = "yolo"
 
         config.min_depth_mm = int(config.min_depth_mm)
         config.max_depth_mm = max(int(config.max_depth_mm), config.min_depth_mm + 50)
@@ -168,6 +206,12 @@ class Config:
         config.llm_base_url = str(config.llm_base_url).strip() or "http://127.0.0.1:1234/v1"
         config.llm_model = str(config.llm_model).strip()
         config.camera_index = max(0, int(config.camera_index))
+        config.cv_detection_confidence = max(0.1, min(1.0, float(config.cv_detection_confidence)))
+        config.cv_detection_model = str(config.cv_detection_model).strip() or "yolo11n.pt"
+        config.cv_detection_api_url = str(config.cv_detection_api_url).strip()
+        config.cv_detection_api_key = str(config.cv_detection_api_key).strip()
+        config.cv_detection_api_model = str(config.cv_detection_api_model).strip()
+        config.cv_ignore_labels = str(config.cv_ignore_labels).strip()
         if config.available_cameras is None:
             config.available_cameras = []
         if not config.vision_calibration_points or len(config.vision_calibration_points) != 4:
@@ -206,6 +250,16 @@ class Config:
             "camera_index": self.camera_index,
             "vision_debug_enabled": self.vision_debug_enabled,
             "vision_calibration_points": self.vision_calibration_points or [],
+            "cv_detection_enabled": self.cv_detection_enabled,
+            "cv_detection_backend": self.cv_detection_backend,
+            "cv_detection_model": self.cv_detection_model,
+            "cv_detection_confidence": self.cv_detection_confidence,
+            "cv_detection_api_url": self.cv_detection_api_url,
+            "cv_detection_api_key": self.cv_detection_api_key,
+            "cv_detection_api_model": self.cv_detection_api_model,
+            "cv_llm_interactions_enabled": self.cv_llm_interactions_enabled,
+            "cv_ignore_labels": self.cv_ignore_labels,
+            "cv_training_mode": self.cv_training_mode,
         }
         CONFIG_PATH.write_text(
             json.dumps(payload, indent=2, sort_keys=True),
@@ -219,6 +273,11 @@ class Config:
         self.ai_changed = True
         self.llm_test_status = "idle"
         self.llm_test_message = ""
+        self.request_save()
+
+    def request_cv_detection_refresh(self) -> None:
+        self.cv_detection_changed = True
+        self.cv_detection_status = ""
         self.request_save()
 
     def request_vision_refresh(self) -> None:
@@ -432,6 +491,64 @@ class Sidebar:
                             config.camera_index = camera_index
                             config.request_vision_refresh()
                         return True
+
+            if layout.get("cv_detection_enabled", pygame.Rect(0, 0, 0, 0)).collidepoint(mx, my):
+                config.cv_detection_enabled = not config.cv_detection_enabled
+                config.request_cv_detection_refresh()
+                return True
+
+            if config.cv_detection_enabled:
+                for backend, _label in CV_BACKENDS:
+                    if layout.get(f"cv_backend_{backend}", pygame.Rect(0, 0, 0, 0)).collidepoint(mx, my):
+                        if config.cv_detection_backend != backend:
+                            config.cv_detection_backend = backend
+                            config.request_cv_detection_refresh()
+                        return True
+
+                if layout.get("cv_llm_interactions_enabled", pygame.Rect(0, 0, 0, 0)).collidepoint(mx, my):
+                    config.cv_llm_interactions_enabled = not config.cv_llm_interactions_enabled
+                    config.request_cv_detection_refresh()
+                    return True
+
+                for field in ("cv_detection_model", "cv_detection_api_url", "cv_detection_api_key", "cv_detection_api_model", "cv_ignore_labels"):
+                    if layout.get(field, pygame.Rect(0, 0, 0, 0)).collidepoint(mx, my):
+                        self._text_input = field
+                        return True
+
+                if layout.get("cv_training_mode", pygame.Rect(0, 0, 0, 0)).collidepoint(mx, my):
+                    config.cv_training_mode = not config.cv_training_mode
+                    config.cv_capture_status = ""
+                    config.cv_capture_label = ""
+                    config.request_save()
+                    return True
+
+                if config.cv_training_mode:
+                    if layout.get("cv_capture", pygame.Rect(0, 0, 0, 0)).collidepoint(mx, my):
+                        if config.cv_capture_status != "Identifying...":
+                            config.cv_capture_requested = True
+                            config.cv_capture_status = "Identifying..."
+                            config.cv_capture_label = ""
+                        return True
+
+                    if layout.get("cv_capture_save", pygame.Rect(0, 0, 0, 0)).collidepoint(mx, my):
+                        if config.cv_capture_label:
+                            config.cv_capture_save_requested = True
+                        return True
+
+                    if layout.get("cv_capture_label", pygame.Rect(0, 0, 0, 0)).collidepoint(mx, my):
+                        self._text_input = "cv_capture_label"
+                        return True
+
+                    for i, obj in enumerate(config.cv_custom_objects or []):
+                        if layout.get(f"cv_obj_del_{i}", pygame.Rect(0, 0, 0, 0)).collidepoint(mx, my):
+                            objects = list(config.cv_custom_objects or [])
+                            objects.pop(i)
+                            config.cv_custom_objects = objects
+                            from cv_object_store import save_objects
+                            save_objects(objects)
+                            config.cv_detection_changed = True
+                            config.request_save()
+                            return True
 
             return True
 
@@ -723,6 +840,143 @@ class Sidebar:
                     bad=False,
                 )
 
+        y = self._section_header(surface, "Object Detection", sx, y + 6)
+        rect = pygame.Rect(ix, y, iw, ROW - 4)
+        layout["cv_detection_enabled"] = rect
+        cv_label = "CV Detection ON" if config.cv_detection_enabled else "CV Detection OFF"
+        self._button(surface, rect, cv_label, active=config.cv_detection_enabled)
+        y += ROW
+
+        if config.cv_detection_enabled:
+            y = self._labelled_buttons(
+                surface,
+                layout,
+                prefix="cv_backend",
+                label="Backend",
+                options=CV_BACKENDS,
+                active_key=config.cv_detection_backend,
+                ix=ix,
+                iw=iw,
+                y=y,
+                columns=2,
+            )
+
+            y = self._draw_slider(surface, config, layout, "cv_confidence", ix, iw, y)
+
+            if config.cv_detection_backend == "yolo":
+                y = self._draw_text_input(
+                    surface,
+                    layout,
+                    key="cv_detection_model",
+                    label="YOLO Model",
+                    value=config.cv_detection_model,
+                    ix=ix,
+                    iw=iw,
+                    y=y,
+                )
+            else:  # openai_vision
+                y = self._draw_text_input(
+                    surface,
+                    layout,
+                    key="cv_detection_api_url",
+                    label="Vision API URL",
+                    value=config.cv_detection_api_url or "(uses LLM URL)",
+                    ix=ix,
+                    iw=iw,
+                    y=y,
+                )
+                y = self._draw_text_input(
+                    surface,
+                    layout,
+                    key="cv_detection_api_model",
+                    label="Vision Model",
+                    value=config.cv_detection_api_model or "gpt-4o",
+                    ix=ix,
+                    iw=iw,
+                    y=y,
+                )
+                y = self._draw_text_input(
+                    surface,
+                    layout,
+                    key="cv_detection_api_key",
+                    label="API Key",
+                    value="*" * min(len(config.cv_detection_api_key), 12) if config.cv_detection_api_key else "(none)",
+                    ix=ix,
+                    iw=iw,
+                    y=y,
+                )
+
+            rect = pygame.Rect(ix, y, iw, ROW - 4)
+            layout["cv_llm_interactions_enabled"] = rect
+            llm_int_label = "LLM Interactions ON" if config.cv_llm_interactions_enabled else "LLM Interactions OFF"
+            self._button(surface, rect, llm_int_label, active=config.cv_llm_interactions_enabled)
+            y += ROW
+
+            y = self._draw_text_input(
+                surface,
+                layout,
+                key="cv_ignore_labels",
+                label="Ignore Labels",
+                value=config.cv_ignore_labels or "(none)",
+                ix=ix,
+                iw=iw,
+                y=y,
+            )
+
+            if config.cv_detection_status:
+                y = self._draw_status_text(
+                    surface,
+                    config.cv_detection_status,
+                    ix,
+                    iw,
+                    y,
+                    ok=False,
+                    bad=config.cv_detection_status.startswith("Error"),
+                )
+
+            y += 4
+            rect = pygame.Rect(ix, y, iw, ROW - 4)
+            layout["cv_training_mode"] = rect
+            train_label = "Training Mode ON" if config.cv_training_mode else "Training Mode"
+            self._button(surface, rect, train_label, active=config.cv_training_mode)
+            y += ROW
+
+            if config.cv_training_mode:
+                rect = pygame.Rect(ix, y, iw, ROW - 4)
+                layout["cv_capture"] = rect
+                capturing = config.cv_capture_status == "Identifying..."
+                self._button(surface, rect, "Identifying..." if capturing else "Capture Object", active=capturing)
+                y += ROW
+
+                if config.cv_capture_status and config.cv_capture_status != "Identifying...":
+                    y = self._draw_status_text(surface, config.cv_capture_status, ix, iw, y, ok=bool(config.cv_capture_label))
+
+                if config.cv_capture_label:
+                    y = self._draw_text_input(
+                        surface, layout,
+                        key="cv_capture_label",
+                        label="Label (rename if needed)",
+                        value=config.cv_capture_label,
+                        ix=ix, iw=iw, y=y,
+                    )
+                    rect = pygame.Rect(ix, y, iw, ROW - 4)
+                    layout["cv_capture_save"] = rect
+                    self._button(surface, rect, "Save Object", active=False)
+                    y += ROW
+
+                objects = config.cv_custom_objects or []
+                if objects:
+                    self._label(surface, f"Trained objects ({len(objects)})", ix, y)
+                    y += 17
+                    del_w = 28
+                    for i, obj in enumerate(objects):
+                        name_rect = pygame.Rect(ix, y, iw - del_w - 4, ROW - 4)
+                        del_rect = pygame.Rect(ix + iw - del_w, y, del_w, ROW - 4)
+                        layout[f"cv_obj_del_{i}"] = del_rect
+                        self._button(surface, name_rect, obj.label[:28], active=True)
+                        self._button(surface, del_rect, "✕", active=False)
+                        y += ROW
+
         self._content_h = y + ROW + PAD + self._scroll
         self._draw_scrollbar(surface, sx, sh)
         self._layout = layout
@@ -737,19 +991,23 @@ class Sidebar:
             return True
 
         value = getattr(config, field)
+        _refresh = config.request_cv_detection_refresh if field.startswith("cv_") else config.request_ai_refresh
         if event.key == pygame.K_BACKSPACE:
             setattr(config, field, value[:-1])
-            config.request_ai_refresh()
+            _refresh()
             return True
         if event.key == pygame.K_DELETE:
             setattr(config, field, "")
-            config.request_ai_refresh()
+            _refresh()
             return True
 
         if event.unicode and event.unicode.isprintable():
             if len(value) < 140:
                 setattr(config, field, value + event.unicode)
-                config.request_ai_refresh()
+                if field.startswith("cv_"):
+                    config.request_cv_detection_refresh()
+                else:
+                    config.request_ai_refresh()
             return True
         return False
 
@@ -796,6 +1054,10 @@ class Sidebar:
             config.request_save()
         elif key == "dinosaurs":
             config.dinosaur_count = int(value)
+            config.request_save()
+        elif key == "cv_confidence":
+            config.cv_detection_confidence = round(float(value), 2)
+            config.cv_detection_changed = True
             config.request_save()
         return True
 
@@ -906,6 +1168,7 @@ class Sidebar:
             "reject": config.foreground_reject_mm,
             "sharks": config.shark_count,
             "dinosaurs": config.dinosaur_count,
+            "cv_confidence": config.cv_detection_confidence,
         }[key]
 
     def _slider_value_text(self, key: str, value: float | int) -> str:
@@ -918,6 +1181,7 @@ class Sidebar:
             "reject": f"{int(value)} mm",
             "sharks": str(int(value)),
             "dinosaurs": str(int(value)),
+            "cv_confidence": f"{float(value):.2f}",
         }[key]
 
     def _section_header(self, surface, label, sx, y):

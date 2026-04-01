@@ -26,6 +26,9 @@ from ai_guide import (
     build_async_narrator,
 )
 from creatures import CreatureManager
+from cv_detector import build_cv_layer
+from cv_interaction import CVInteractionEngine
+from cv_object_store import CustomObject, identify_object, load_objects, save_objects
 # from depth_source import MouseSimulator
 from depth_source import KinectV1Source
 from interaction_engine import InteractionEngine
@@ -288,6 +291,112 @@ def _make_calibration(config: Config) -> CalibrationData:
     return CalibrationData(camera_points=tuple((float(x), float(y)) for x, y in points))
 
 
+class _AsyncCapture:
+    """Fire-and-forget API call for training capture.  Poll result each frame."""
+
+    def __init__(self) -> None:
+        import threading
+        self._lock = threading.Lock()
+        self._result: dict | None = None
+        self._running = False
+
+    @property
+    def running(self) -> bool:
+        with self._lock:
+            return self._running
+
+    def start(self, frame_b64: str, base_url: str, model: str, api_key: str, timeout: float) -> None:
+        import threading
+        with self._lock:
+            if self._running:
+                return
+            self._running = True
+            self._result = None
+        threading.Thread(
+            target=self._run,
+            args=(frame_b64, base_url, model, api_key, timeout),
+            daemon=True,
+        ).start()
+
+    def poll(self) -> "dict | None":
+        with self._lock:
+            r = self._result
+            if r is not None:
+                self._result = None
+                self._running = False
+            return r
+
+    def _run(self, frame_b64: str, base_url: str, model: str, api_key: str, timeout: float) -> None:
+        result = identify_object(frame_b64, base_url=base_url, model=model, api_key=api_key, timeout=timeout)
+        with self._lock:
+            self._result = result
+
+
+def _apply_cv_config(
+    vision: WebcamObserver | None,
+    cv_interactions: CVInteractionEngine,
+    config: Config,
+) -> str:
+    """
+    Build/rebuild the CVDetectionLayer on the WebcamObserver and configure
+    LLM interactions.  Returns a status message (empty string = ok).
+    """
+    if vision is None or not config.cv_detection_enabled:
+        if vision is not None:
+            vision.set_cv_layer(None)
+        cv_interactions.disable_llm()
+        return ""
+
+    ignore_labels = {
+        lbl.strip().lower()
+        for lbl in config.cv_ignore_labels.split(",")
+        if lbl.strip()
+    }
+    layer = build_cv_layer(
+        config.cv_detection_backend,
+        model=config.cv_detection_model,
+        api_url=config.cv_detection_api_url or config.llm_base_url,
+        api_key=config.cv_detection_api_key,
+        api_model=config.cv_detection_api_model,
+        timeout=config.llm_timeout_seconds,
+        min_confidence=config.cv_detection_confidence,
+        ignore_labels=ignore_labels,
+    )
+    vision.set_cv_layer(layer)
+
+    if layer is None:
+        if config.cv_detection_backend == "yolo":
+            return "Error: ultralytics not installed. Run: pip install ultralytics"
+        return "Error: Vision API backend unavailable (check URL and model)."
+
+    # Load and inject custom trained objects
+    objects = load_objects()
+    config.cv_custom_objects = objects
+    if objects:
+        api_url = config.cv_detection_api_url or config.llm_base_url
+        api_model = config.cv_detection_api_model or config.llm_model
+        layer.set_custom_objects(
+            objects,
+            api_url=api_url,
+            api_model=api_model,
+            api_key=config.cv_detection_api_key,
+            timeout=config.llm_timeout_seconds,
+        )
+        print(f"[CV] loaded {len(objects)} custom object(s): {', '.join(o.label for o in objects)}")
+
+    if config.cv_llm_interactions_enabled and config.llm_enabled and config.llm_backend != "template":
+        cv_interactions.configure_llm(
+            base_url=config.llm_base_url,
+            model=config.llm_model,
+            api_key="",
+            timeout=config.llm_timeout_seconds,
+        )
+    else:
+        cv_interactions.disable_llm()
+
+    return ""
+
+
 def main() -> int:
     pygame.init()
     pygame.display.set_caption("AR Sandbox")
@@ -317,6 +426,10 @@ def main() -> int:
     vision = WebcamObserver(config.camera_index) if config.vision_enabled else None
     calibration = _make_calibration(config)
     interactions = InteractionEngine()
+    cv_interactions = CVInteractionEngine()
+    config.cv_custom_objects = load_objects()
+    config.cv_detection_status = _apply_cv_config(vision, cv_interactions, config)
+    capture = _AsyncCapture()
     camera_discovery = AsyncCameraDiscovery()
     camera_tester = AsyncCameraTester()
     llm_tester = AsyncConnectionTester()
@@ -405,6 +518,8 @@ def main() -> int:
                     elif not config.camera_test_message:
                         config.camera_test_status = "ok"
                         config.camera_test_message = f"Camera {config.camera_index} ready."
+                    # Re-apply CV detection after rebuilding the observer
+                    config.cv_detection_status = _apply_cv_config(vision, cv_interactions, config)
                 else:
                     config.available_cameras = []
                     config.camera_scan_status = "idle"
@@ -412,6 +527,66 @@ def main() -> int:
                     config.camera_test_status = "idle"
                     config.camera_test_message = ""
                     config.calibration_message = ""
+                    config.cv_detection_status = ""
+
+            if config.cv_detection_changed:
+                config.cv_detection_changed = False
+                config.cv_detection_status = _apply_cv_config(vision, cv_interactions, config)
+
+            if config.cv_capture_requested and not capture.running:
+                config.cv_capture_requested = False
+                raw_frame = vision.get_latest_frame() if vision is not None else None
+                if raw_frame is not None:
+                    import base64 as _b64
+                    try:
+                        import cv2 as _cv2  # type: ignore
+                        _, buf = _cv2.imencode(".jpg", raw_frame, [_cv2.IMWRITE_JPEG_QUALITY, 80])
+                        frame_b64 = _b64.b64encode(buf.tobytes()).decode()
+                        api_url = config.cv_detection_api_url or config.llm_base_url
+                        api_model = config.cv_detection_api_model or config.llm_model
+                        capture.start(
+                            frame_b64,
+                            base_url=api_url,
+                            model=api_model,
+                            api_key=config.cv_detection_api_key,
+                            timeout=config.llm_timeout_seconds,
+                        )
+                    except ImportError:
+                        config.cv_capture_status = "Error: OpenCV required for capture."
+                else:
+                    config.cv_capture_status = "Error: no camera frame available."
+
+            capture_result = capture.poll()
+            if capture_result is not None:
+                if "error" in capture_result:
+                    config.cv_capture_status = f"Error: {capture_result['error']}"
+                    config.cv_capture_label = ""
+                else:
+                    label = str(capture_result.get("label", "unknown"))
+                    desc = str(capture_result.get("description", ""))
+                    config.cv_capture_label = label
+                    config.cv_capture_description = desc
+                    config.cv_capture_status = f"Found: {label}"
+                    print(f"[CV training] identified '{label}': {desc}")
+
+            if config.cv_capture_save_requested:
+                config.cv_capture_save_requested = False
+                if config.cv_capture_label:
+                    objects = list(config.cv_custom_objects or [])
+                    objects = [o for o in objects if o.label != config.cv_capture_label]
+                    objects.append(CustomObject(
+                        label=config.cv_capture_label,
+                        description=config.cv_capture_description,
+                        thumbnail_b64=config.cv_capture_thumbnail_b64,
+                    ))
+                    save_objects(objects)
+                    config.cv_custom_objects = objects
+                    config.cv_capture_label = ""
+                    config.cv_capture_description = ""
+                    config.cv_capture_thumbnail_b64 = ""
+                    config.cv_capture_status = f"Saved '{objects[-1].label}'. Place next object or exit training."
+                    config.cv_detection_changed = True  # reload layer with new objects
+                    print(f"[CV training] saved '{objects[-1].label}' ({len(objects)} total)")
 
             if config.llm_test_requested:
                 config.llm_test_requested = False
@@ -528,6 +703,13 @@ def main() -> int:
                     time.monotonic(),
                     reactions_enabled=config.object_reactions_enabled,
                 )
+                cv_objects = vision.get_cv_objects(calibration, (render_w, render_h), frame=frame)
+                cv_interactions.update(
+                    cv_objects,
+                    frame,
+                    time.monotonic(),
+                    interactions_enabled=config.cv_detection_enabled,
+                )
                 if config.vision_calibrating or config.vision_debug_enabled:
                     overlay_rgb = vision.get_warped_rgb(calibration, (render_w, render_h))
                     overlay_label = "Calibration View"
@@ -545,6 +727,7 @@ def main() -> int:
                         scene.blit(shadow, (11, 11))
                         scene.blit(label, (10, 10))
                 interactions.draw(scene)
+                cv_interactions.draw(scene)
                 if config.vision_debug_enabled:
                     for kind, _camera_pos, mapped_pos in vision.debug_points(calibration, (render_w, render_h)):
                         px, py = int(mapped_pos[0]), int(mapped_pos[1])
@@ -552,6 +735,7 @@ def main() -> int:
                         tag = debug_font.render(kind, True, (255, 230, 90))
                         scene.blit(tag, (px + 8, py - 8))
                 vision_events = interactions.pop_events()
+                vision_events.extend(cv_interactions.pop_events())
 
             guide_message = None
             active_challenge = None
@@ -634,7 +818,7 @@ def main() -> int:
             pass
         try:
             if vision is not None:
-                vision.close()
+                vision.close()  # also closes the attached CVDetectionLayer
         except Exception:
             pass
         try:
