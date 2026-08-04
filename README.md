@@ -11,6 +11,18 @@ The app also now supports an **optional webcam vision layer** for tagged toy
 interactions, plus an optional AI guide.  Both systems are independently
 disableable, so the project can always run as a plain AR sandbox.
 
+For local AI/CV setups, the app now assumes Docker Model Runner's
+OpenAI-compatible endpoint at `http://localhost:12434/engines/v1`.
+
+New to the project: start with [FIRST-TIME-SETUP.md](c:/Git/sandcam/FIRST-TIME-SETUP.md).
+
+If you only want to configure and test model settings without launching the
+sandbox, run:
+
+```powershell
+uv run python llm_setup_app.py
+```
+
 ---
 
 ## How it works
@@ -280,6 +292,145 @@ sandcam/
 | `scipy` | Gaussian smoothing, frame resize |
 | `opencv-contrib-python` | Optional webcam capture + ArUco marker detection |
 | libfreenect (native) | Kinect v1 USB driver + depth stream |
+
+---
+
+## LLM and CV Requests
+
+The app talks to local or remote models using an OpenAI-compatible
+`chat/completions` request shape.
+
+Important: the configured `base_url` should be the API root, not the final
+endpoint path. The code appends `/chat/completions` itself.
+
+Examples:
+
+- Docker Model Runner: `http://localhost:12434/engines/v1`
+- other local OpenAI-compatible servers: their equivalent API root
+
+Do not set the base URL to something that already ends in
+`/chat/completions` or `/completions`.
+
+### Guide LLM request
+
+When the optional guide narrator is enabled, the app sends a text-only chat
+request containing the current guide message, active challenge text, and a
+small world-state summary.
+
+Example shape:
+
+```json
+{
+  "model": "ai/qwen3-vl:2B-UD-Q4_K_XL",
+  "temperature": 0.7,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a kid-friendly narrator for an AR sandbox..."
+    },
+    {
+      "role": "user",
+      "content": "{\"message\":{\"kind\":\"observation\",\"title\":\"Large Lake\",\"body\":\"A wide lake has formed.\"},\"challenge_text\":\"\",\"world_state\":{\"water_ratio\":0.32,\"land_ratio\":0.68,\"coastline_ratio\":0.15,\"highest_peak\":0.81,\"islands\":0,\"lakes\":1,\"features\":[\"large_lake\",\"mountain_range\"],\"shark_count\":1,\"dinosaur_count\":0},\"verbosity\":\"normal\"}"
+    }
+  ]
+}
+```
+
+### CV detection request
+
+When `vision.detection.backend = openai_vision`, the app sends the current
+camera frame as a base64 `image_url` plus a short detection instruction.
+
+Example shape:
+
+```json
+{
+  "model": "ai/qwen3-vl:2B-UD-Q4_K_XL",
+  "max_tokens": 512,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a vision detector for an AR sandbox..."
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "image_url",
+          "image_url": {
+            "url": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD..."
+          }
+        },
+        {
+          "type": "text",
+          "text": "Detect all objects."
+        }
+      ]
+    }
+  ]
+}
+```
+
+The detector expects a JSON-array-style response describing objects with
+`label`, `confidence`, and `bbox`.
+
+### CV training request
+
+When `Training Mode` is on and you click `Capture Object`, the app sends an
+image request to the configured CV reasoner model asking it to identify one
+object and return compact JSON.
+
+Example shape:
+
+```json
+{
+  "model": "ai/qwen3-vl:2B-UD-Q4_K_XL",
+  "max_tokens": 200,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are identifying a specific physical toy or object placed in an augmented-reality sandbox so the user can track it by name..."
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "image_url",
+          "image_url": {
+            "url": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD..."
+          }
+        },
+        {
+          "type": "text",
+          "text": "Identify this object."
+        }
+      ]
+    }
+  ]
+}
+```
+
+Expected response shape:
+
+```json
+{
+  "label": "red toy car",
+  "description": "small red plastic racing car with yellow wheels"
+}
+```
+
+### Using YOLO with a multimodal reasoner
+
+The most practical setup is still:
+
+- `YOLO` for live detection and tracking
+- a local or remote multimodal model for:
+  - object naming during training
+  - relabeling known custom objects
+  - optional guide wording
+
+This keeps the live path responsive while still letting a multimodal model
+interpret images when needed.
 
 ---
 
