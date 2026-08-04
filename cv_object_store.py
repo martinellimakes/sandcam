@@ -15,6 +15,8 @@ import pathlib
 from dataclasses import asdict, dataclass
 from urllib import request as urllib_request
 
+from ai_guide import normalize_openai_base_url
+
 STORE_PATH = pathlib.Path(__file__).with_name("cv-custom-objects.json")
 
 _IDENTIFY_SYSTEM = (
@@ -81,7 +83,7 @@ def _vision_call(
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     req = urllib_request.Request(
-        f"{base_url.rstrip('/')}/chat/completions",
+        f"{normalize_openai_base_url(base_url)}/chat/completions",
         data=payload,
         headers=headers,
     )

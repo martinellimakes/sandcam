@@ -14,6 +14,8 @@ from typing import Iterable
 
 import pygame
 
+from ai_guide import normalize_openai_base_url
+
 # ── palette ───────────────────────────────────────────────────────────────────
 _BG         = (22, 24, 34)
 _DIVIDER    = (44, 48, 66)
@@ -390,13 +392,17 @@ class Config:
         config.windowed_h = max(240, int(config.windowed_h))
         config.llm_timeout_seconds = max(0.5, float(config.llm_timeout_seconds))
         config.guide_update_seconds = max(2.0, float(config.guide_update_seconds))
-        config.llm_base_url = str(config.llm_base_url).strip() or DEFAULT_LOCAL_BASE_URL
+        config.llm_base_url = normalize_openai_base_url(
+            str(config.llm_base_url).strip() or DEFAULT_LOCAL_BASE_URL
+        )
         config.llm_model = str(config.llm_model).strip()
         config.camera_index = max(0, int(config.camera_index))
         config.cv_detection_confidence = max(0.1, min(1.0, float(config.cv_detection_confidence)))
         config.cv_detection_model = str(config.cv_detection_model).strip() or "yolo11n.pt"
-        config.cv_detection_api_url = str(config.cv_detection_api_url).strip()
-        config.cv_detection_api_key = str(config.cv_detection_api_key).strip()
+        cv_url = str(config.cv_detection_api_url).strip()
+        config.cv_detection_api_url = (
+            normalize_openai_base_url(cv_url) if cv_url else ""
+        )        config.cv_detection_api_key = str(config.cv_detection_api_key).strip()
         config.cv_detection_api_model = str(config.cv_detection_api_model).strip()
         config.cv_ignore_labels = str(config.cv_ignore_labels).strip()
         if config.available_cameras is None:
@@ -452,7 +458,7 @@ class Config:
                     "provider": {
                         "location": self.llm_provider_location,
                         "api_style": self.llm_provider_api_style,
-                        "base_url": self.llm_base_url,
+                        "base_url": normalize_openai_base_url(self.llm_base_url),
                         "model": self.llm_model,
                     },
                 },
@@ -474,7 +480,11 @@ class Config:
                     "reasoner": {
                         "location": self.cv_reasoner_location,
                         "api_style": self.cv_reasoner_api_style,
-                        "base_url": self.cv_detection_api_url,
+                        "base_url": (
+                            normalize_openai_base_url(self.cv_detection_api_url)
+                            if str(self.cv_detection_api_url).strip()
+                            else ""
+                        ),
                         "api_key": self.cv_detection_api_key,
                         "model": self.cv_detection_api_model,
                     },

@@ -15,6 +15,7 @@ from ai_guide import (
     TemplateNarrator,
     WorldAnalyzer,
     WorldEvent,
+    normalize_openai_base_url,
     test_provider_connection,
 )
 
@@ -197,6 +198,24 @@ class GuideTests(unittest.TestCase):
         )
         self.assertTrue(result.ok)
         self.assertIn("Connection Passed", result.summary)
+
+    def test_normalize_openai_base_url(self) -> None:
+        self.assertEqual(
+            normalize_openai_base_url("http://localhost:12434/v1"),
+            "http://localhost:12434/engines/v1",
+        )
+        self.assertEqual(
+            normalize_openai_base_url("http://localhost:12434/engines/v1/chat/completions"),
+            "http://localhost:12434/engines/v1",
+        )
+        self.assertEqual(
+            normalize_openai_base_url("https://api.example.com/v1/completions"),
+            "https://api.example.com/v1",
+        )
+        self.assertEqual(
+            normalize_openai_base_url(""),
+            "http://localhost:12434/engines/v1",
+        )
 
 
 if __name__ == "__main__":

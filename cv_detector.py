@@ -24,7 +24,7 @@ from typing import Any, Protocol
 import numpy as np
 
 
-DEFAULT_LOCAL_BASE_URL = "http://localhost:12434/engines/v1"
+from ai_guide import DEFAULT_LOCAL_BASE_URL, normalize_openai_base_url
 
 
 # ── raw detection ─────────────────────────────────────────────────────────────
@@ -132,7 +132,7 @@ class OpenAIVisionDetector:
         api_key: str = "",
         timeout: float = 8.0,
     ) -> None:
-        self._base_url = base_url.rstrip("/")
+        self._base_url = normalize_openai_base_url(base_url)
         self._model = model
         self._api_key = api_key
         self._timeout = timeout

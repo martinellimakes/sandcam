@@ -13,7 +13,7 @@ import tkinter as tk
 from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
 
-from ai_guide import ProviderConfig, test_provider_connection
+from ai_guide import ProviderConfig, normalize_openai_base_url, test_provider_connection
 from ui import Config, DEFAULT_LOCAL_BASE_URL
 
 
@@ -261,7 +261,9 @@ class ModelSetupApp:
         self.config.guide_enabled = bool(self.guide_enabled_var.get())
         self.config.llm_enabled = bool(self.guide_llm_enabled_var.get())
         self.config.llm_provider_location = self.guide_provider_var.get().strip() or "local"
-        self.config.llm_base_url = self.guide_base_url_var.get().strip() or DEFAULT_LOCAL_BASE_URL
+        self.config.llm_base_url = normalize_openai_base_url(
+            self.guide_base_url_var.get().strip() or DEFAULT_LOCAL_BASE_URL
+        )
         self.config.llm_model = self.guide_model_var.get().strip()
         try:
             self.config.llm_timeout_seconds = max(0.5, float(self.guide_timeout_var.get().strip() or "2.0"))
@@ -270,7 +272,10 @@ class ModelSetupApp:
 
         self.config.cv_detection_enabled = bool(self.cv_detection_enabled_var.get())
         self.config.cv_reasoner_location = self.cv_provider_var.get().strip() or "local"
-        self.config.cv_detection_api_url = self.cv_base_url_var.get().strip()
+        cv_url = self.cv_base_url_var.get().strip()
+        self.config.cv_detection_api_url = (
+            normalize_openai_base_url(cv_url) if cv_url else ""
+        )
         self.config.cv_detection_api_model = self.cv_model_var.get().strip()
         self.config.cv_detection_api_key = self.cv_api_key_var.get().strip()
 

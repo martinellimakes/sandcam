@@ -20,6 +20,7 @@ from urllib import request as urllib_request
 import numpy as np
 import pygame
 
+from ai_guide import normalize_openai_base_url
 from webcam_observer import CVTrackedObject, VisionEvent
 
 
@@ -117,7 +118,7 @@ class _LLMWorker:
     """Fire-and-forget LLM queries with result polling.  Thread-safe."""
 
     def __init__(self, base_url: str, model: str, api_key: str, timeout: float) -> None:
-        self._base_url = base_url.rstrip("/")
+        self._base_url = normalize_openai_base_url(base_url)
         self._model = model
         self._api_key = api_key
         self._timeout = timeout

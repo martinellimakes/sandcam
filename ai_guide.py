@@ -35,6 +35,39 @@ _SYSTEM_PROMPT = (
 DEFAULT_LOCAL_BASE_URL = "http://localhost:12434/engines/v1"
 
 
+def normalize_openai_base_url(url: str, *, default: str = DEFAULT_LOCAL_BASE_URL) -> str:
+    """Return an API-root base URL suitable for appending /chat/completions.
+
+    Strips trailing endpoint paths users often paste by mistake, and rewrites
+    the common Docker Model Runner ``:12434/v1`` form to ``:12434/engines/v1``.
+    """
+    from urllib.parse import urlsplit, urlunsplit
+
+    cleaned = (url or "").strip()
+    if not cleaned:
+        return default
+
+    cleaned = cleaned.rstrip("/")
+    lower = cleaned.lower()
+    for suffix in ("/chat/completions", "/completions"):
+        if lower.endswith(suffix):
+            cleaned = cleaned[: -len(suffix)].rstrip("/")
+            lower = cleaned.lower()
+            break
+
+    parts = urlsplit(cleaned)
+    host = (parts.hostname or "").lower()
+    if host in {"localhost", "127.0.0.1"} and parts.port == 12434:
+        path = (parts.path or "").rstrip("/")
+        if path in {"", "/v1"}:
+            path = "/engines/v1"
+        elif path == "/engines":
+            path = "/engines/v1"
+        cleaned = urlunsplit((parts.scheme or "http", parts.netloc, path, "", ""))
+
+    return cleaned.rstrip("/")
+
+
 @dataclass(frozen=True)
 class ProviderConfig:
     backend: str = "template"
@@ -252,7 +285,10 @@ class OpenAICompatibleNarrator:
         *,
         opener: Any = None,
     ) -> None:
-        self._config = config
+        self._config = replace(
+            config,
+            base_url=normalize_openai_base_url(config.base_url),
+        )
         self._opener = opener if opener is not None else request.urlopen
 
     def generate(
