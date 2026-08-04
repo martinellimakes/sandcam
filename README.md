@@ -141,6 +141,9 @@ The calibration markers are ArUco tags with these fixed IDs:
 
 These are separate from the object interaction markers below.
 
+Calibration and object markers use OpenCV `DICT_4X4_250` so IDs `100`–`103`
+are valid.
+
 ### Object marker IDs
 
 The first version uses fixed marker IDs for object types:

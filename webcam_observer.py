@@ -452,7 +452,7 @@ class WebcamObserver:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
         if hasattr(cv2, "aruco") and hasattr(cv2.aruco, "getPredefinedDictionary"):
-            dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+            dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_250)
             if hasattr(cv2.aruco, "DetectorParameters"):
                 detector = cv2.aruco.ArucoDetector(dictionary, cv2.aruco.DetectorParameters())
                 corners, ids, _rejected = detector.detectMarkers(gray)
