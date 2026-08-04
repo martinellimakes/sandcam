@@ -50,12 +50,10 @@ uv run python llm_setup_app.py
 
 ## First Run
 
-The safest first run is with the simulator instead of the Kinect.
+The safest first run uses the mouse simulator (the default depth source).
 
-In [main.py](c:/Git/sandcam/main.py):
-
-- enable `MouseSimulator`
-- disable `KinectV1Source`
+Open the settings sidebar with `Tab` and confirm **Simulator** is selected under
+Terrain. Switch to **Kinect** only after the base app works.
 
 Then run:
 
@@ -96,7 +94,9 @@ Simulator-only terrain controls:
 
 ### 3. Add Kinect depth
 
-Once the simulator is working, switch `main.py` back to `KinectV1Source`.
+Once the simulator is working, open the sidebar with `Tab` and choose **Kinect**
+under Terrain. If the Kinect fails to open, the app falls back to the simulator
+and shows a status message.
 
 Then:
 

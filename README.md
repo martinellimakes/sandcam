@@ -44,12 +44,10 @@ Kinect v1 (depth camera)
 
 ## Running without hardware (mouse simulator)
 
-```bash
-# in main.py, ensure this line is active:
-#   source = MouseSimulator(WIDTH, HEIGHT)
-# and this is commented out:
-#   source = KinectV1Source(WIDTH, HEIGHT)
+The default depth source is the mouse simulator. Confirm it in the settings
+sidebar (`Tab` → Terrain → **Simulator`), then run:
 
+```bash
 uv run python main.py
 ```
 
@@ -201,25 +199,15 @@ The Kinect ships with an Xbox HID driver.  libfreenect needs WinUSB instead.
 
 ### 3 — Run with hardware
 
-In `main.py`, switch the source:
+Open the settings sidebar with `Tab` and choose **Kinect** under Terrain.
+If the device fails to open, the app falls back to the simulator and shows a
+status message.
 
-```python
-# from depth_source import MouseSimulator
-from depth_source import KinectV1Source
-...
-# source = MouseSimulator(WIDTH, HEIGHT)
-source = KinectV1Source(WIDTH, HEIGHT)
-```
+Tune the depth range to your physical rig (camera height above sandbox) under
+Terrain Debug (enable Debug Mode first):
 
-Tune the depth range to your physical rig (camera height above sandbox):
-
-```python
-source = KinectV1Source(
-    WIDTH, HEIGHT,
-    min_depth_mm=400,   # camera-to-peak-of-sand distance
-    max_depth_mm=1100,  # camera-to-bare-sandbox-floor distance
-)
-```
+- Min ≈ camera-to-peak-of-sand distance (mm)
+- Max ≈ camera-to-bare-sandbox-floor distance (mm)
 
 ```powershell
 uv run python main.py

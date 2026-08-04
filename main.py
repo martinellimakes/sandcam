@@ -29,7 +29,7 @@ from creatures import CreatureManager
 from cv_detector import build_cv_layer
 from cv_interaction import CVInteractionEngine
 from cv_object_store import CustomObject, identify_object, load_objects, save_objects
-from depth_source import KinectV1Source, MouseSimulator
+from depth_source import DepthSource, KinectV1Source, MouseSimulator
 from interaction_engine import InteractionEngine
 from renderer import Renderer
 from ui import Config, Sidebar, draw_guide_overlay
@@ -47,6 +47,40 @@ BRUSH_DEFAULT = 50
 BRUSH_DELTA   = 0.012
 MAX_RENDER_W  = 960
 MAX_RENDER_H  = 720
+
+
+def _make_depth_source(config: Config, width: int, height: int) -> tuple[DepthSource, str]:
+    """Create the configured depth source, falling back to the simulator on failure."""
+    if config.depth_source == "kinect":
+        try:
+            return (
+                KinectV1Source(
+                    width,
+                    height,
+                    min_depth_mm=config.min_depth_mm,
+                    max_depth_mm=config.max_depth_mm,
+                    temporal_alpha=config.temporal_alpha,
+                    change_threshold_mm=config.change_threshold_mm,
+                    persistence_frames=config.persistence_frames,
+                    foreground_reject_mm=config.foreground_reject_mm,
+                ),
+                "",
+            )
+        except Exception as exc:
+            config.depth_source = "simulator"
+            return MouseSimulator(width, height), f"Kinect failed; using simulator ({exc})"
+    return MouseSimulator(width, height), ""
+
+
+def _close_depth_source(source: DepthSource | None) -> None:
+    if source is None:
+        return
+    closer = getattr(source, "close", None)
+    if callable(closer):
+        try:
+            closer()
+        except Exception:
+            pass
 
 
 def _draw_startup_screen(
@@ -416,14 +450,8 @@ def main() -> int:
     render_w, render_h = _compute_render_size(screen_w, screen_h)
     scene = pygame.Surface((render_w, render_h))
 
-    # source  = MouseSimulator(render_w, render_h)
-    source   = KinectV1Source(render_w, render_h,
-                              min_depth_mm=config.min_depth_mm,
-                              max_depth_mm=config.max_depth_mm,
-                              temporal_alpha=config.temporal_alpha,
-                              change_threshold_mm=config.change_threshold_mm,
-                              persistence_frames=config.persistence_frames,
-                              foreground_reject_mm=config.foreground_reject_mm)
+    source, depth_status = _make_depth_source(config, render_w, render_h)
+    config.depth_source_status = depth_status
     renderer = Renderer(render_w, render_h)
     creatures = CreatureManager(
         n_sharks=config.shark_count,
@@ -491,6 +519,15 @@ def main() -> int:
                 scene = pygame.Surface((render_w, render_h))
                 renderer = Renderer(render_w, render_h)
                 source.resize(render_w, render_h)
+
+            if config.depth_source_changed:
+                config.depth_source_changed = False
+                old_source = source
+                source, depth_status = _make_depth_source(config, render_w, render_h)
+                config.depth_source_status = depth_status or (
+                    "Using Kinect" if config.depth_source == "kinect" else "Using simulator"
+                )
+                _close_depth_source(old_source)
 
             if config.depth_range_changed:
                 config.depth_range_changed = False
@@ -826,12 +863,16 @@ def main() -> int:
 
             creatures_state = "on" if config.show_creatures else "off"
             ai_state = "ai:on" if config.ai_enabled else "ai:off"
+            source_state = "kinect" if config.depth_source == "kinect" else "sim"
             hud = f"Tab settings  C contours  G creatures:{creatures_state}"
             if can_sculpt:
                 hud += f"  R reset  brush {brush_radius}px"
-            hud += f"  |  {config.colour_scheme}  {ai_state}"
+            hud += f"  |  {config.colour_scheme}  {source_state}  {ai_state}"
             label = hud_font.render(hud, True, (200, 200, 200))
             screen.blit(label, (10, screen.get_height() - 24))
+            if config.depth_source_status:
+                status = hud_font.render(config.depth_source_status, True, (255, 200, 90))
+                screen.blit(status, (10, screen.get_height() - 48))
 
             sidebar.update(dt)
             sidebar.draw(screen, config)
@@ -869,8 +910,7 @@ def main() -> int:
         except Exception:
             pass
         try:
-            if hasattr(source, "close"):
-                source.close()
+            _close_depth_source(source)
         finally:
             pygame.quit()
 

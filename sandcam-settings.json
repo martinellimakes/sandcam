@@ -35,6 +35,7 @@
     "verbosity": "normal"
   },
   "terrain": {
+    "source": "simulator",
     "colour_scheme": "terrain",
     "depth": {
       "max_mm": 1100,

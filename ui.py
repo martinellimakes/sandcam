@@ -49,6 +49,10 @@ CV_BACKENDS = [
     ("yolo", "YOLO"),
     ("openai_vision", "Vision API"),
 ]
+DEPTH_SOURCES = [
+    ("simulator", "Simulator"),
+    ("kinect", "Kinect"),
+]
 CONFIG_PATH = pathlib.Path(__file__).with_name("sandcam-settings.json")
 _GUIDE_FONTS: tuple[pygame.font.Font, pygame.font.Font, pygame.font.Font] | None = None
 SLIDER_SPECS = {
@@ -86,6 +90,7 @@ def _flatten_saved_config(raw: dict) -> dict:
     _copy_if_present(
         terrain,
         {
+            "source": "depth_source",
             "colour_scheme": "colour_scheme",
             "show_contours": "show_contours",
         },
@@ -224,6 +229,7 @@ class Config:
     change_threshold_mm: int = 35
     persistence_frames: int = 4
     foreground_reject_mm: int = 120
+    depth_source: str = "simulator"
     colour_scheme: str = "terrain"
     show_contours: bool = True
     show_creatures: bool = True
@@ -276,6 +282,8 @@ class Config:
     cv_custom_objects: list = None           # transient: loaded from store for display  # type: ignore[assignment]
     # ── transient flags ───────────────────────────────────────────────────────
     display_changed: bool = False
+    depth_source_changed: bool = False
+    depth_source_status: str = ""
     depth_range_changed: bool = False
     filter_changed: bool = False
     ai_changed: bool = False
@@ -311,6 +319,8 @@ class Config:
 
         transient = {
             "display_changed",
+            "depth_source_changed",
+            "depth_source_status",
             "depth_range_changed",
             "filter_changed",
             "ai_changed",
@@ -346,6 +356,8 @@ class Config:
         if "debug_mode" not in raw and "show_advanced" in raw:
             config.debug_mode = bool(raw["show_advanced"])
 
+        if config.depth_source not in {key for key, _ in DEPTH_SOURCES}:
+            config.depth_source = "simulator"
         if config.colour_scheme not in SCHEMES:
             config.colour_scheme = "terrain"
         if config.guide_verbosity not in VERBOSITIES:
@@ -407,6 +419,7 @@ class Config:
                 },
             },
             "terrain": {
+                "source": self.depth_source,
                 "colour_scheme": self.colour_scheme,
                 "show_contours": self.show_contours,
                 "depth": {
@@ -600,6 +613,15 @@ class Sidebar:
                 config.show_contours = not config.show_contours
                 config.request_save()
                 return True
+
+            for source_key, _ in DEPTH_SOURCES:
+                if layout.get(f"depth_source_{source_key}", pygame.Rect(0, 0, 0, 0)).collidepoint(mx, my):
+                    if config.depth_source != source_key:
+                        config.depth_source = source_key
+                        config.depth_source_changed = True
+                        config.depth_source_status = ""
+                        config.request_save()
+                    return True
 
             if layout.get("debug_mode", pygame.Rect(0, 0, 0, 0)).collidepoint(mx, my):
                 config.debug_mode = not config.debug_mode
@@ -874,7 +896,29 @@ class Sidebar:
         rect = pygame.Rect(ix, y, iw, ROW - 4)
         layout["contours"] = rect
         self._button(surface, rect, "Contour Lines", active=config.show_contours)
+        y += ROW + 4
+
+        btn_w = (iw - 6) // 2
+        for i, (source_key, source_label) in enumerate(DEPTH_SOURCES):
+            bx = ix + i * (btn_w + 6)
+            rect = pygame.Rect(bx, y, btn_w, ROW - 4)
+            layout[f"depth_source_{source_key}"] = rect
+            self._button(
+                surface,
+                rect,
+                source_label,
+                active=config.depth_source == source_key,
+            )
         y += ROW
+        if config.depth_source_status:
+            y = self._draw_status_text(
+                surface,
+                config.depth_source_status,
+                ix,
+                iw,
+                y,
+                ok=False,
+            )
 
         if config.debug_mode:
             y = self._section_header(surface, "Terrain Debug", sx, y + 6)
