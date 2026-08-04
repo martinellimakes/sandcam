@@ -70,6 +70,6 @@
       "training_mode": false
     },
     "enabled": false,
-    "object_reactions_enabled": true
+    "object_reactions_enabled": false
   }
 }

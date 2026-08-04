@@ -254,7 +254,7 @@ class Config:
     guide_verbosity: str = "normal"
     guide_update_seconds: float = 8.0
     vision_enabled: bool = False
-    object_reactions_enabled: bool = True
+    object_reactions_enabled: bool = False
     camera_index: int = 0
     available_cameras: list[dict[str, str | int]] | None = None
     vision_debug_enabled: bool = False
@@ -638,6 +638,7 @@ class Sidebar:
                 if not config.debug_mode:
                     config.vision_debug_enabled = False
                     config.cv_training_mode = False
+                    config.object_reactions_enabled = False
                     config.cv_capture_status = ""
                     config.cv_capture_label = ""
                 config.request_save()
@@ -658,7 +659,13 @@ class Sidebar:
                 if not config.vision_enabled:
                     config.vision_calibrating = False
                     config.calibration_message = ""
+                else:
+                    # YOLO object detection is the primary camera sensing path.
+                    config.cv_detection_enabled = True
+                    config.cv_detection_backend = "yolo"
                 config.request_vision_refresh()
+                if config.vision_enabled:
+                    config.request_cv_detection_refresh()
                 return True
 
             if config.ai_enabled:
@@ -1047,11 +1054,16 @@ class Sidebar:
         y += ROW
 
         if config.vision_enabled:
-            rect = pygame.Rect(ix, y, iw, ROW - 4)
-            layout["object_reactions_enabled"] = rect
-            reactions_label = "Object Reactions ON" if config.object_reactions_enabled else "Object Reactions OFF"
-            self._button(surface, rect, reactions_label, active=config.object_reactions_enabled)
-            y += ROW
+            if config.debug_mode:
+                rect = pygame.Rect(ix, y, iw, ROW - 4)
+                layout["object_reactions_enabled"] = rect
+                reactions_label = (
+                    "ArUco Marker Toys ON"
+                    if config.object_reactions_enabled
+                    else "ArUco Marker Toys OFF"
+                )
+                self._button(surface, rect, reactions_label, active=config.object_reactions_enabled)
+                y += ROW
 
             rect = pygame.Rect(ix, y, iw, ROW - 4)
             layout["camera_scan"] = rect
@@ -1592,8 +1604,11 @@ def draw_guide_overlay(
     body: str | None,
     challenge_text: str | None,
     challenge_done: bool = False,
+    force: bool = False,
 ) -> None:
-    if not (config.ai_enabled and config.guide_enabled and title and body):
+    if not (title and body):
+        return
+    if not force and not (config.ai_enabled and config.guide_enabled):
         return
 
     global _GUIDE_FONTS

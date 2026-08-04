@@ -75,14 +75,22 @@ sandbox.  It is fully optional:
 
 ### What it does
 
-When enabled, a standard RGB webcam can detect tagged objects placed on the
-sand and trigger local sandbox interactions such as:
+When enabled, a standard RGB webcam can detect objects on the sand and trigger
+local sandbox interactions.
+
+The primary path is **YOLO object detection** (optionally with custom training).
+Fixed ArUco toy markers remain available under Debug Mode as a secondary path.
+
+Examples:
 
 - boat in water → ripple-style water reaction
 - boat on land → stranded event
 - dinosaur toy on land → habitat-themed reaction
 - house or tree near coast → settlement / shoreline reaction
 - volcano toy → hazard-style reaction
+
+Object event captions still appear when AI Features are off (as short toasts).
+With the AI guide enabled, those events can also feed the guide overlay.
 
 ### Setup
 

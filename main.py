@@ -475,6 +475,9 @@ def main() -> int:
     clock    = pygame.time.Clock()
 
     brush_radius = BRUSH_DEFAULT
+    vision_toast_title = ""
+    vision_toast_body = ""
+    vision_toast_until = 0.0
 
     try:
         running = True
@@ -836,8 +839,16 @@ def main() -> int:
                         )
                         if pushed is not None:
                             guide_message = pushed
+                else:
+                    for vision_event in vision_events:
+                        vision_toast_title = vision_event.title
+                        vision_toast_body = vision_event.body
+                        vision_toast_until = time.monotonic() + 6.0
             else:
-                vision_events.clear()
+                for vision_event in vision_events:
+                    vision_toast_title = vision_event.title
+                    vision_toast_body = vision_event.body
+                    vision_toast_until = time.monotonic() + 6.0
 
             if scene.get_size() == screen.get_size():
                 screen.blit(scene, (0, 0))
@@ -845,18 +856,28 @@ def main() -> int:
                 scaled = pygame.transform.scale(scene, screen.get_size())
                 screen.blit(scaled, (0, 0))
 
-            draw_guide_overlay(
-                screen,
-                config,
-                title=guide_message.title if guide_message else None,
-                body=guide_message.body if guide_message else None,
-                challenge_text=(
-                    active_challenge.prompt
-                    if (active_challenge is not None and config.guide_challenges_enabled)
-                    else None
-                ),
-                challenge_done=bool(guide_message.completed) if guide_message else False,
-            )
+            if guide_message is not None and config.ai_enabled and config.guide_enabled:
+                draw_guide_overlay(
+                    screen,
+                    config,
+                    title=guide_message.title,
+                    body=guide_message.body,
+                    challenge_text=(
+                        active_challenge.prompt
+                        if (active_challenge is not None and config.guide_challenges_enabled)
+                        else None
+                    ),
+                    challenge_done=bool(guide_message.completed),
+                )
+            elif time.monotonic() < vision_toast_until and vision_toast_title and vision_toast_body:
+                draw_guide_overlay(
+                    screen,
+                    config,
+                    title=vision_toast_title,
+                    body=vision_toast_body,
+                    challenge_text=None,
+                    force=True,
+                )
 
             if can_sculpt:
                 pygame.draw.circle(screen, (255, 255, 255), (mx, my), brush_radius, 1)
