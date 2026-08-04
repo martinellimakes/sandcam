@@ -402,7 +402,8 @@ class Config:
         cv_url = str(config.cv_detection_api_url).strip()
         config.cv_detection_api_url = (
             normalize_openai_base_url(cv_url) if cv_url else ""
-        )        config.cv_detection_api_key = str(config.cv_detection_api_key).strip()
+        )
+        config.cv_detection_api_key = str(config.cv_detection_api_key).strip()
         config.cv_detection_api_model = str(config.cv_detection_api_model).strip()
         config.cv_ignore_labels = str(config.cv_ignore_labels).strip()
         if config.available_cameras is None:
