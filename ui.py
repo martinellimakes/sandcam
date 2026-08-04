@@ -41,10 +41,9 @@ ANIM_SPEED  = 1680.0
 
 SCHEMES = ["terrain", "heat", "greyscale", "desert"]
 VERBOSITIES = ["quiet", "normal", "lively"]
-LLM_BACKENDS = [
-    ("template", "Template"),
-    ("local_openai_compatible", "Local"),
-    ("cloud_openai_compatible", "Cloud"),
+PROVIDER_LOCATIONS = [
+    ("local", "Local"),
+    ("remote", "Remote"),
 ]
 CV_BACKENDS = [
     ("yolo", "YOLO"),
@@ -65,8 +64,160 @@ SLIDER_SPECS = {
 }
 
 
+DEFAULT_LOCAL_BASE_URL = "http://localhost:12434/engines/v1"
+
+
+def _flatten_saved_config(raw: dict) -> dict:
+    if not isinstance(raw, dict):
+        return {}
+
+    flattened: dict = {}
+
+    def _copy_if_present(source: dict, mapping: dict[str, str]) -> None:
+        if not isinstance(source, dict):
+            return
+        for source_key, target_key in mapping.items():
+            if source_key in source:
+                flattened[target_key] = source[source_key]
+
+    _copy_if_present(raw.get("debug", {}), {"enabled": "debug_mode"})
+
+    terrain = raw.get("terrain", {})
+    _copy_if_present(
+        terrain,
+        {
+            "colour_scheme": "colour_scheme",
+            "show_contours": "show_contours",
+        },
+    )
+    _copy_if_present(
+        terrain.get("depth", {}),
+        {
+            "min_mm": "min_depth_mm",
+            "max_mm": "max_depth_mm",
+        },
+    )
+    _copy_if_present(
+        terrain.get("smoothing", {}),
+        {
+            "blend": "temporal_alpha",
+            "threshold_mm": "change_threshold_mm",
+            "delay_frames": "persistence_frames",
+            "reject_mm": "foreground_reject_mm",
+        },
+    )
+
+    _copy_if_present(
+        raw.get("creatures", {}),
+        {
+            "enabled": "show_creatures",
+        },
+    )
+    _copy_if_present(
+        raw.get("creatures", {}).get("counts", {}),
+        {
+            "sharks": "shark_count",
+            "dinosaurs": "dinosaur_count",
+        },
+    )
+
+    _copy_if_present(
+        raw.get("display", {}),
+        {
+            "index": "display_index",
+            "borderless": "fullscreen",
+        },
+    )
+    _copy_if_present(
+        raw.get("display", {}).get("windowed", {}),
+        {
+            "width": "windowed_w",
+            "height": "windowed_h",
+        },
+    )
+
+    guide = raw.get("guide", {})
+    _copy_if_present(
+        guide,
+        {
+            "enabled": "ai_enabled",
+            "overlay_enabled": "guide_enabled",
+            "challenges_enabled": "guide_challenges_enabled",
+            "verbosity": "guide_verbosity",
+            "update_seconds": "guide_update_seconds",
+        },
+    )
+    _copy_if_present(
+        guide.get("llm", {}),
+        {
+            "enabled": "llm_enabled",
+            "backend": "llm_backend",
+            "base_url": "llm_base_url",
+            "model": "llm_model",
+            "timeout_seconds": "llm_timeout_seconds",
+        },
+    )
+    _copy_if_present(
+        guide.get("llm", {}).get("provider", {}),
+        {
+            "location": "llm_provider_location",
+            "api_style": "llm_provider_api_style",
+            "base_url": "llm_base_url",
+            "model": "llm_model",
+        },
+    )
+
+    vision = raw.get("vision", {})
+    _copy_if_present(
+        vision,
+        {
+            "enabled": "vision_enabled",
+            "object_reactions_enabled": "object_reactions_enabled",
+            "camera_index": "camera_index",
+            "debug_overlay_enabled": "vision_debug_enabled",
+            "calibration_points": "vision_calibration_points",
+        },
+    )
+    detection = vision.get("detection", {})
+    _copy_if_present(
+        detection,
+        {
+            "enabled": "cv_detection_enabled",
+            "backend": "cv_detection_backend",
+            "model": "cv_detection_model",
+            "confidence": "cv_detection_confidence",
+            "llm_interactions_enabled": "cv_llm_interactions_enabled",
+            "ignore_labels": "cv_ignore_labels",
+            "training_mode": "cv_training_mode",
+        },
+    )
+    _copy_if_present(
+        detection.get("api", {}),
+        {
+            "url": "cv_detection_api_url",
+            "key": "cv_detection_api_key",
+            "model": "cv_detection_api_model",
+        },
+    )
+    _copy_if_present(
+        detection.get("reasoner", {}),
+        {
+            "location": "cv_reasoner_location",
+            "api_style": "cv_reasoner_api_style",
+            "base_url": "cv_detection_api_url",
+            "api_key": "cv_detection_api_key",
+            "model": "cv_detection_api_model",
+        },
+    )
+
+    if flattened:
+        return flattened
+    return dict(raw)
+
+
 @dataclass
 class Config:
+    debug_mode: bool = False
     min_depth_mm: int = 400
     max_depth_mm: int = 1100
     temporal_alpha: float = 0.35
@@ -86,8 +237,10 @@ class Config:
     guide_enabled: bool = True
     guide_challenges_enabled: bool = True
     llm_enabled: bool = False
+    llm_provider_location: str = "local"
+    llm_provider_api_style: str = "openai_compatible"
     llm_backend: str = "template"
-    llm_base_url: str = "http://127.0.0.1:1234/v1"
+    llm_base_url: str = DEFAULT_LOCAL_BASE_URL
     llm_model: str = ""
     llm_timeout_seconds: float = 2.0
     guide_verbosity: str = "normal"
@@ -104,6 +257,8 @@ class Config:
     cv_detection_backend: str = "yolo"       # "yolo" | "openai_vision"
     cv_detection_model: str = "yolo11n.pt"   # YOLO model file
     cv_detection_confidence: float = 0.5
+    cv_reasoner_location: str = "local"
+    cv_reasoner_api_style: str = "openai_compatible"
     cv_detection_api_url: str = ""           # vision API base URL (openai_vision)
     cv_detection_api_key: str = ""           # vision API key
     cv_detection_api_model: str = ""         # vision model name
@@ -136,6 +291,9 @@ class Config:
     llm_test_requested: bool = False
     llm_test_status: str = "idle"
     llm_test_message: str = ""
+    cv_reasoner_test_requested: bool = False
+    cv_reasoner_test_status: str = "idle"
+    cv_reasoner_test_message: str = ""
     save_requested: bool = False
 
     @classmethod
@@ -148,6 +306,8 @@ class Config:
             raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return config
+
+        raw = _flatten_saved_config(raw)
 
         transient = {
             "display_changed",
@@ -175,20 +335,35 @@ class Config:
             "llm_test_requested",
             "llm_test_status",
             "llm_test_message",
+            "cv_reasoner_test_requested",
+            "cv_reasoner_test_status",
+            "cv_reasoner_test_message",
             "save_requested",
         }
         for key, value in raw.items():
             if hasattr(config, key) and key not in transient:
                 setattr(config, key, value)
+        if "debug_mode" not in raw and "show_advanced" in raw:
+            config.debug_mode = bool(raw["show_advanced"])
 
         if config.colour_scheme not in SCHEMES:
             config.colour_scheme = "terrain"
         if config.guide_verbosity not in VERBOSITIES:
             config.guide_verbosity = "normal"
-        if config.llm_backend not in {backend for backend, _ in LLM_BACKENDS}:
+        if config.llm_backend not in {"template", "local_openai_compatible", "cloud_openai_compatible"}:
             config.llm_backend = "template"
+        if config.llm_provider_location not in {key for key, _ in PROVIDER_LOCATIONS}:
+            config.llm_provider_location = "local"
+        if config.cv_reasoner_location not in {key for key, _ in PROVIDER_LOCATIONS}:
+            config.cv_reasoner_location = "local"
         if config.cv_detection_backend not in {b for b, _ in CV_BACKENDS}:
             config.cv_detection_backend = "yolo"
+
+        if "llm_provider_location" not in raw:
+            if config.llm_backend == "cloud_openai_compatible":
+                config.llm_provider_location = "remote"
+            else:
+                config.llm_provider_location = "local"
 
         config.min_depth_mm = int(config.min_depth_mm)
         config.max_depth_mm = max(int(config.max_depth_mm), config.min_depth_mm + 50)
@@ -203,7 +378,7 @@ class Config:
         config.windowed_h = max(240, int(config.windowed_h))
         config.llm_timeout_seconds = max(0.5, float(config.llm_timeout_seconds))
         config.guide_update_seconds = max(2.0, float(config.guide_update_seconds))
-        config.llm_base_url = str(config.llm_base_url).strip() or "http://127.0.0.1:1234/v1"
+        config.llm_base_url = str(config.llm_base_url).strip() or DEFAULT_LOCAL_BASE_URL
         config.llm_model = str(config.llm_model).strip()
         config.camera_index = max(0, int(config.camera_index))
         config.cv_detection_confidence = max(0.1, min(1.0, float(config.cv_detection_confidence)))
@@ -220,46 +395,78 @@ class Config:
 
     def save(self) -> None:
         payload = {
-            "min_depth_mm": self.min_depth_mm,
-            "max_depth_mm": self.max_depth_mm,
-            "temporal_alpha": self.temporal_alpha,
-            "change_threshold_mm": self.change_threshold_mm,
-            "persistence_frames": self.persistence_frames,
-            "foreground_reject_mm": self.foreground_reject_mm,
-            "colour_scheme": self.colour_scheme,
-            "show_contours": self.show_contours,
-            "show_creatures": self.show_creatures,
-            "shark_count": self.shark_count,
-            "dinosaur_count": self.dinosaur_count,
-            "display_index": self.display_index,
-            "fullscreen": self.fullscreen,
-            "windowed_w": self.windowed_w,
-            "windowed_h": self.windowed_h,
-            "ai_enabled": self.ai_enabled,
-            "guide_enabled": self.guide_enabled,
-            "guide_challenges_enabled": self.guide_challenges_enabled,
-            "llm_enabled": self.llm_enabled,
-            "llm_backend": self.llm_backend,
-            "llm_base_url": self.llm_base_url,
-            "llm_model": self.llm_model,
-            "llm_timeout_seconds": self.llm_timeout_seconds,
-            "guide_verbosity": self.guide_verbosity,
-            "guide_update_seconds": self.guide_update_seconds,
-            "vision_enabled": self.vision_enabled,
-            "object_reactions_enabled": self.object_reactions_enabled,
-            "camera_index": self.camera_index,
-            "vision_debug_enabled": self.vision_debug_enabled,
-            "vision_calibration_points": self.vision_calibration_points or [],
-            "cv_detection_enabled": self.cv_detection_enabled,
-            "cv_detection_backend": self.cv_detection_backend,
-            "cv_detection_model": self.cv_detection_model,
-            "cv_detection_confidence": self.cv_detection_confidence,
-            "cv_detection_api_url": self.cv_detection_api_url,
-            "cv_detection_api_key": self.cv_detection_api_key,
-            "cv_detection_api_model": self.cv_detection_api_model,
-            "cv_llm_interactions_enabled": self.cv_llm_interactions_enabled,
-            "cv_ignore_labels": self.cv_ignore_labels,
-            "cv_training_mode": self.cv_training_mode,
+            "debug": {
+                "enabled": self.debug_mode,
+            },
+            "display": {
+                "index": self.display_index,
+                "borderless": self.fullscreen,
+                "windowed": {
+                    "width": self.windowed_w,
+                    "height": self.windowed_h,
+                },
+            },
+            "terrain": {
+                "colour_scheme": self.colour_scheme,
+                "show_contours": self.show_contours,
+                "depth": {
+                    "min_mm": self.min_depth_mm,
+                    "max_mm": self.max_depth_mm,
+                },
+                "smoothing": {
+                    "blend": self.temporal_alpha,
+                    "threshold_mm": self.change_threshold_mm,
+                    "delay_frames": self.persistence_frames,
+                    "reject_mm": self.foreground_reject_mm,
+                },
+            },
+            "creatures": {
+                "enabled": self.show_creatures,
+                "counts": {
+                    "sharks": self.shark_count,
+                    "dinosaurs": self.dinosaur_count,
+                },
+            },
+            "guide": {
+                "enabled": self.ai_enabled,
+                "overlay_enabled": self.guide_enabled,
+                "challenges_enabled": self.guide_challenges_enabled,
+                "verbosity": self.guide_verbosity,
+                "update_seconds": self.guide_update_seconds,
+                "llm": {
+                    "enabled": self.llm_enabled,
+                    "timeout_seconds": self.llm_timeout_seconds,
+                    "provider": {
+                        "location": self.llm_provider_location,
+                        "api_style": self.llm_provider_api_style,
+                        "base_url": self.llm_base_url,
+                        "model": self.llm_model,
+                    },
+                },
+            },
+            "vision": {
+                "enabled": self.vision_enabled,
+                "object_reactions_enabled": self.object_reactions_enabled,
+                "camera_index": self.camera_index,
+                "debug_overlay_enabled": self.vision_debug_enabled,
+                "calibration_points": self.vision_calibration_points or [],
+                "detection": {
+                    "enabled": self.cv_detection_enabled,
+                    "backend": self.cv_detection_backend,
+                    "model": self.cv_detection_model,
+                    "confidence": self.cv_detection_confidence,
+                    "llm_interactions_enabled": self.cv_llm_interactions_enabled,
+                    "ignore_labels": self.cv_ignore_labels,
+                    "training_mode": self.cv_training_mode,
+                    "reasoner": {
+                        "location": self.cv_reasoner_location,
+                        "api_style": self.cv_reasoner_api_style,
+                        "base_url": self.cv_detection_api_url,
+                        "api_key": self.cv_detection_api_key,
+                        "model": self.cv_detection_api_model,
+                    },
+                },
+            },
         }
         CONFIG_PATH.write_text(
             json.dumps(payload, indent=2, sort_keys=True),
@@ -303,6 +510,11 @@ class Config:
         self.llm_test_requested = True
         self.llm_test_status = "running"
         self.llm_test_message = "Testing LLM connection..."
+
+    def request_cv_reasoner_test(self) -> None:
+        self.cv_reasoner_test_requested = True
+        self.cv_reasoner_test_status = "running"
+        self.cv_reasoner_test_message = "Testing CV reasoner connection..."
 
 
 class Sidebar:
@@ -389,6 +601,16 @@ class Sidebar:
                 config.request_save()
                 return True
 
+            if layout.get("debug_mode", pygame.Rect(0, 0, 0, 0)).collidepoint(mx, my):
+                config.debug_mode = not config.debug_mode
+                if not config.debug_mode:
+                    config.vision_debug_enabled = False
+                    config.cv_training_mode = False
+                    config.cv_capture_status = ""
+                    config.cv_capture_label = ""
+                config.request_save()
+                return True
+
             if layout.get("creatures", pygame.Rect(0, 0, 0, 0)).collidepoint(mx, my):
                 config.show_creatures = not config.show_creatures
                 config.request_save()
@@ -423,10 +645,10 @@ class Sidebar:
                     config.request_ai_refresh()
                     return True
 
-                for backend, _label in LLM_BACKENDS:
-                    if layout.get(f"backend_{backend}", pygame.Rect(0, 0, 0, 0)).collidepoint(mx, my):
-                        if config.llm_backend != backend:
-                            config.llm_backend = backend
+                for location, _label in PROVIDER_LOCATIONS:
+                    if layout.get(f"llm_provider_{location}", pygame.Rect(0, 0, 0, 0)).collidepoint(mx, my):
+                        if config.llm_provider_location != location:
+                            config.llm_provider_location = location
                             config.request_ai_refresh()
                         return True
 
@@ -505,6 +727,13 @@ class Sidebar:
                             config.request_cv_detection_refresh()
                         return True
 
+                for location, _label in PROVIDER_LOCATIONS:
+                    if layout.get(f"cv_reasoner_{location}", pygame.Rect(0, 0, 0, 0)).collidepoint(mx, my):
+                        if config.cv_reasoner_location != location:
+                            config.cv_reasoner_location = location
+                            config.request_cv_detection_refresh()
+                        return True
+
                 if layout.get("cv_llm_interactions_enabled", pygame.Rect(0, 0, 0, 0)).collidepoint(mx, my):
                     config.cv_llm_interactions_enabled = not config.cv_llm_interactions_enabled
                     config.request_cv_detection_refresh()
@@ -514,6 +743,10 @@ class Sidebar:
                     if layout.get(field, pygame.Rect(0, 0, 0, 0)).collidepoint(mx, my):
                         self._text_input = field
                         return True
+
+                if layout.get("cv_reasoner_test", pygame.Rect(0, 0, 0, 0)).collidepoint(mx, my):
+                    config.request_cv_reasoner_test()
+                    return True
 
                 if layout.get("cv_training_mode", pygame.Rect(0, 0, 0, 0)).collidepoint(mx, my):
                     config.cv_training_mode = not config.cv_training_mode
@@ -606,23 +839,11 @@ class Sidebar:
         surface.blit(hint, (sx + SIDEBAR_W - PAD - hint.get_width(), y + 2))
         y += 28
 
-        y = self._section_header(surface, "Depth Range", sx, y)
-        for key in ("min", "max"):
-            y = self._draw_slider(surface, config, layout, key, ix, iw, y)
-
-        y = self._section_header(surface, "Smoothing", sx, y + 4)
-        for key in ("alpha", "threshold", "persist", "reject"):
-            y = self._draw_slider(surface, config, layout, key, ix, iw, y)
-
-        y = self._section_header(surface, "Colour Scheme", sx, y + 4)
-        btn_w = (iw - 6) // 2
-        for i, scheme in enumerate(SCHEMES):
-            bx = ix + (i % 2) * (btn_w + 6)
-            by = y + (i // 2) * (ROW + 2)
-            rect = pygame.Rect(bx, by, btn_w, ROW - 4)
-            layout[f"scheme_{scheme}"] = rect
-            self._button(surface, rect, scheme.capitalize(), active=config.colour_scheme == scheme)
-        y += ((len(SCHEMES) - 1) // 2 + 1) * (ROW + 2) + 6
+        rect = pygame.Rect(ix, y, iw, ROW - 4)
+        layout["debug_mode"] = rect
+        debug_label = "Debug Mode ON" if config.debug_mode else "Debug Mode"
+        self._button(surface, rect, debug_label, active=config.debug_mode)
+        y += ROW + 8
 
         y = self._section_header(surface, "Display", sx, y)
         displays = pygame.display.get_desktop_sizes()
@@ -640,22 +861,38 @@ class Sidebar:
         self._button(surface, rect, fs_label, active=config.fullscreen)
         y += ROW + 10
 
-        y = self._section_header(surface, "View", sx, y)
+        y = self._section_header(surface, "Terrain", sx, y)
+        btn_w = (iw - 6) // 2
+        for i, scheme in enumerate(SCHEMES):
+            bx = ix + (i % 2) * (btn_w + 6)
+            by = y + (i // 2) * (ROW + 2)
+            rect = pygame.Rect(bx, by, btn_w, ROW - 4)
+            layout[f"scheme_{scheme}"] = rect
+            self._button(surface, rect, scheme.capitalize(), active=config.colour_scheme == scheme)
+        y += ((len(SCHEMES) - 1) // 2 + 1) * (ROW + 2) + 6
+
         rect = pygame.Rect(ix, y, iw, ROW - 4)
         layout["contours"] = rect
         self._button(surface, rect, "Contour Lines", active=config.show_contours)
         y += ROW
 
+        if config.debug_mode:
+            y = self._section_header(surface, "Terrain Debug", sx, y + 6)
+            for key in ("min", "max"):
+                y = self._draw_slider(surface, config, layout, key, ix, iw, y)
+            for key in ("alpha", "threshold", "persist", "reject"):
+                y = self._draw_slider(surface, config, layout, key, ix, iw, y)
+
+        y = self._section_header(surface, "Creatures", sx, y)
         rect = pygame.Rect(ix, y, iw, ROW - 4)
         layout["creatures"] = rect
         creatures_label = "Creatures ON" if config.show_creatures else "Creatures OFF"
         self._button(surface, rect, creatures_label, active=config.show_creatures)
-        y += ROW + 8
-        y = self._section_header(surface, "Creatures", sx, y)
+        y += ROW
         for key in ("sharks", "dinosaurs"):
             y = self._draw_slider(surface, config, layout, key, ix, iw, y)
 
-        y = self._section_header(surface, "AI Guide", sx, y)
+        y = self._section_header(surface, "Guide", sx, y + 6)
         rect = pygame.Rect(ix, y, iw, ROW - 4)
         layout["ai_enabled"] = rect
         ai_label = "AI Features ON" if config.ai_enabled else "AI Features OFF"
@@ -679,79 +916,79 @@ class Sidebar:
             self._button(surface, rect, llm_label, active=config.llm_enabled)
             y += ROW + 2
 
-            y = self._labelled_buttons(
-                surface,
-                layout,
-                prefix="verbosity",
-                label="Verbosity",
-                options=[(item, item.capitalize()) for item in VERBOSITIES],
-                active_key=config.guide_verbosity,
-                ix=ix,
-                iw=iw,
-                y=y,
-                columns=3,
-            )
-
-            if config.llm_enabled:
+            if config.debug_mode:
                 y = self._labelled_buttons(
                     surface,
                     layout,
-                    prefix="backend",
-                    label="LLM Backend",
-                    options=LLM_BACKENDS,
-                    active_key=config.llm_backend,
+                    prefix="verbosity",
+                    label="Verbosity",
+                    options=[(item, item.capitalize()) for item in VERBOSITIES],
+                    active_key=config.guide_verbosity,
                     ix=ix,
                     iw=iw,
-                    y=y + 2,
+                    y=y,
                     columns=3,
                 )
 
-                if config.llm_backend != "template":
-                    y = self._draw_text_input(
-                        surface,
-                        layout,
-                        key="llm_model",
-                        label="LLM Model",
-                        value=config.llm_model or "(provider default)",
-                        ix=ix,
-                        iw=iw,
-                        y=y + 2,
-                    )
-                    y = self._draw_text_input(
-                        surface,
-                        layout,
-                        key="llm_base_url",
-                        label="Endpoint URL",
-                        value=config.llm_base_url,
-                        ix=ix,
-                        iw=iw,
-                        y=y + 2,
-                    )
-                    rect = pygame.Rect(ix, y + 6, iw, ROW - 4)
-                    layout["llm_test"] = rect
-                    label = "Testing..." if config.llm_test_status == "running" else "Test LLM Connection"
-                    self._button(
-                        surface,
-                        rect,
-                        label,
-                        active=config.llm_test_status == "running",
-                    )
-                    y += ROW + 2
-                    if config.llm_test_message:
-                        y = self._draw_status_text(
-                            surface,
-                            config.llm_test_message,
-                            ix,
-                            iw,
-                            y,
-                            ok=config.llm_test_status == "ok",
-                            bad=config.llm_test_status == "error",
-                        )
+            if config.llm_enabled and config.debug_mode:
+                y = self._labelled_buttons(
+                    surface,
+                    layout,
+                    prefix="llm_provider",
+                    label="Model Provider",
+                    options=PROVIDER_LOCATIONS,
+                    active_key=config.llm_provider_location,
+                    ix=ix,
+                    iw=iw,
+                    y=y + 2,
+                    columns=2,
+                )
 
-        y = self._section_header(surface, "Vision", sx, y + 6)
+                y = self._draw_text_input(
+                    surface,
+                    layout,
+                    key="llm_model",
+                    label="LLM Model",
+                    value=config.llm_model or "(provider default)",
+                    ix=ix,
+                    iw=iw,
+                    y=y + 2,
+                )
+                y = self._draw_text_input(
+                    surface,
+                    layout,
+                    key="llm_base_url",
+                    label="Endpoint URL",
+                    value=config.llm_base_url,
+                    ix=ix,
+                    iw=iw,
+                    y=y + 2,
+                )
+                rect = pygame.Rect(ix, y + 6, iw, ROW - 4)
+                layout["llm_test"] = rect
+                label = "Testing..." if config.llm_test_status == "running" else "Test LLM Connection"
+                self._button(
+                    surface,
+                    rect,
+                    label,
+                    active=config.llm_test_status == "running",
+                )
+                y += ROW + 2
+                if config.llm_test_message:
+                    y = self._draw_status_text(
+                        surface,
+                        config.llm_test_message,
+                        ix,
+                        iw,
+                        y,
+                        ok=config.llm_test_status == "ok",
+                        bad=config.llm_test_status == "error",
+                    )
+
+        y = self._section_header(surface, "Objects", sx, y + 6)
         rect = pygame.Rect(ix, y, iw, ROW - 4)
         layout["vision_enabled"] = rect
-        vision_label = "Vision ON" if config.vision_enabled else "Vision OFF"
+        vision_label = "Camera Sensing ON" if config.vision_enabled else "Camera Sensing OFF"
         self._button(surface, rect, vision_label, active=config.vision_enabled)
         y += ROW
 
@@ -760,25 +997,6 @@ class Sidebar:
             layout["object_reactions_enabled"] = rect
             reactions_label = "Object Reactions ON" if config.object_reactions_enabled else "Object Reactions OFF"
             self._button(surface, rect, reactions_label, active=config.object_reactions_enabled)
-            y += ROW
-
-            rect = pygame.Rect(ix, y, iw, ROW - 4)
-            layout["vision_debug_enabled"] = rect
-            debug_label = "Vision Debug ON" if config.vision_debug_enabled else "Vision Debug OFF"
-            self._button(surface, rect, debug_label, active=config.vision_debug_enabled)
-            y += ROW + 2
-
-            self._label(surface, "Camera Index", ix, y)
-            y += 17
-            btn_w = (iw - 12) // 3
-            left = pygame.Rect(ix, y, btn_w, ROW - 4)
-            mid = pygame.Rect(ix + btn_w + 6, y, btn_w, ROW - 4)
-            right = pygame.Rect(ix + (btn_w + 6) * 2, y, btn_w, ROW - 4)
-            layout["camera_minus"] = left
-            layout["camera_plus"] = right
-            self._button(surface, left, "-", active=False)
-            self._button(surface, mid, f"{config.camera_index}", active=True)
-            self._button(surface, right, "+", active=False)
             y += ROW
 
             rect = pygame.Rect(ix, y, iw, ROW - 4)
@@ -840,57 +1058,69 @@ class Sidebar:
                     bad=False,
                 )
 
-        y = self._section_header(surface, "Object Detection", sx, y + 6)
-        rect = pygame.Rect(ix, y, iw, ROW - 4)
-        layout["cv_detection_enabled"] = rect
-        cv_label = "CV Detection ON" if config.cv_detection_enabled else "CV Detection OFF"
-        self._button(surface, rect, cv_label, active=config.cv_detection_enabled)
-        y += ROW
+            rect = pygame.Rect(ix, y + 2, iw, ROW - 4)
+            layout["cv_detection_enabled"] = rect
+            cv_label = "Object Detection ON" if config.cv_detection_enabled else "Object Detection OFF"
+            self._button(surface, rect, cv_label, active=config.cv_detection_enabled)
+            y += ROW + 2
 
-        if config.cv_detection_enabled:
-            y = self._labelled_buttons(
-                surface,
-                layout,
-                prefix="cv_backend",
-                label="Backend",
-                options=CV_BACKENDS,
-                active_key=config.cv_detection_backend,
-                ix=ix,
-                iw=iw,
-                y=y,
-                columns=2,
-            )
-
-            y = self._draw_slider(surface, config, layout, "cv_confidence", ix, iw, y)
-
-            if config.cv_detection_backend == "yolo":
-                y = self._draw_text_input(
+            if config.cv_detection_enabled and config.debug_mode:
+                y = self._labelled_buttons(
                     surface,
                     layout,
-                    key="cv_detection_model",
-                    label="YOLO Model",
-                    value=config.cv_detection_model,
+                    prefix="cv_backend",
+                    label="Detection Backend",
+                    options=CV_BACKENDS,
+                    active_key=config.cv_detection_backend,
                     ix=ix,
                     iw=iw,
                     y=y,
+                    columns=2,
                 )
-            else:  # openai_vision
-                y = self._draw_text_input(
+
+                y = self._labelled_buttons(
                     surface,
                     layout,
-                    key="cv_detection_api_url",
-                    label="Vision API URL",
-                    value=config.cv_detection_api_url or "(uses LLM URL)",
+                    prefix="cv_reasoner",
+                    label="Reasoning Provider",
+                    options=PROVIDER_LOCATIONS,
+                    active_key=config.cv_reasoner_location,
                     ix=ix,
                     iw=iw,
                     y=y,
+                    columns=2,
                 )
+
+                y = self._draw_slider(surface, config, layout, "cv_confidence", ix, iw, y)
+
+                if config.cv_detection_backend == "yolo":
+                    y = self._draw_text_input(
+                        surface,
+                        layout,
+                        key="cv_detection_model",
+                        label="YOLO Model",
+                        value=config.cv_detection_model,
+                        ix=ix,
+                        iw=iw,
+                        y=y,
+                    )
+
                 y = self._draw_text_input(
                     surface,
                     layout,
                     key="cv_detection_api_model",
-                    label="Vision Model",
-                    value=config.cv_detection_api_model or "gpt-4o",
+                    label="Reasoner Model",
+                    value=config.cv_detection_api_model or "(provider default)",
+                    ix=ix,
+                    iw=iw,
+                    y=y,
+                )
+                y = self._draw_text_input(
+                    surface,
+                    layout,
+                    key="cv_detection_api_url",
+                    label="Reasoner URL",
+                    value=config.cv_detection_api_url or "(uses guide URL)",
                     ix=ix,
                     iw=iw,
                     y=y,
@@ -899,83 +1129,128 @@ class Sidebar:
                     surface,
                     layout,
                     key="cv_detection_api_key",
-                    label="API Key",
+                    label="Reasoner API Key",
                     value="*" * min(len(config.cv_detection_api_key), 12) if config.cv_detection_api_key else "(none)",
                     ix=ix,
                     iw=iw,
                     y=y,
                 )
-
-            rect = pygame.Rect(ix, y, iw, ROW - 4)
-            layout["cv_llm_interactions_enabled"] = rect
-            llm_int_label = "LLM Interactions ON" if config.cv_llm_interactions_enabled else "LLM Interactions OFF"
-            self._button(surface, rect, llm_int_label, active=config.cv_llm_interactions_enabled)
-            y += ROW
-
-            y = self._draw_text_input(
-                surface,
-                layout,
-                key="cv_ignore_labels",
-                label="Ignore Labels",
-                value=config.cv_ignore_labels or "(none)",
-                ix=ix,
-                iw=iw,
-                y=y,
-            )
-
-            if config.cv_detection_status:
-                y = self._draw_status_text(
-                    surface,
-                    config.cv_detection_status,
-                    ix,
-                    iw,
-                    y,
-                    ok=False,
-                    bad=config.cv_detection_status.startswith("Error"),
+                rect = pygame.Rect(ix, y + 2, iw, ROW - 4)
+                layout["cv_reasoner_test"] = rect
+                reasoner_label = (
+                    "Testing CV Reasoner..."
+                    if config.cv_reasoner_test_status == "running"
+                    else "Test CV Reasoner"
                 )
+                self._button(
+                    surface,
+                    rect,
+                    reasoner_label,
+                    active=config.cv_reasoner_test_status == "running",
+                )
+                y += ROW + 2
+                if config.cv_reasoner_test_message:
+                    y = self._draw_status_text(
+                        surface,
+                        config.cv_reasoner_test_message,
+                        ix,
+                        iw,
+                        y,
+                        ok=config.cv_reasoner_test_status == "ok",
+                        bad=config.cv_reasoner_test_status == "error",
+                    )
 
-            y += 4
-            rect = pygame.Rect(ix, y, iw, ROW - 4)
-            layout["cv_training_mode"] = rect
-            train_label = "Training Mode ON" if config.cv_training_mode else "Training Mode"
-            self._button(surface, rect, train_label, active=config.cv_training_mode)
-            y += ROW
-
-            if config.cv_training_mode:
                 rect = pygame.Rect(ix, y, iw, ROW - 4)
-                layout["cv_capture"] = rect
-                capturing = config.cv_capture_status == "Identifying..."
-                self._button(surface, rect, "Identifying..." if capturing else "Capture Object", active=capturing)
+                layout["cv_llm_interactions_enabled"] = rect
+                llm_int_label = "LLM Interactions ON" if config.cv_llm_interactions_enabled else "LLM Interactions OFF"
+                self._button(surface, rect, llm_int_label, active=config.cv_llm_interactions_enabled)
                 y += ROW
 
-                if config.cv_capture_status and config.cv_capture_status != "Identifying...":
-                    y = self._draw_status_text(surface, config.cv_capture_status, ix, iw, y, ok=bool(config.cv_capture_label))
+                y = self._draw_text_input(
+                    surface,
+                    layout,
+                    key="cv_ignore_labels",
+                    label="Ignore Labels",
+                    value=config.cv_ignore_labels or "(none)",
+                    ix=ix,
+                    iw=iw,
+                    y=y,
+                )
 
-                if config.cv_capture_label:
-                    y = self._draw_text_input(
-                        surface, layout,
-                        key="cv_capture_label",
-                        label="Label (rename if needed)",
-                        value=config.cv_capture_label,
-                        ix=ix, iw=iw, y=y,
+            if config.cv_detection_enabled:
+                if config.cv_detection_status:
+                    y = self._draw_status_text(
+                        surface,
+                        config.cv_detection_status,
+                        ix,
+                        iw,
+                        y,
+                        ok=False,
+                        bad=config.cv_detection_status.startswith("Error"),
                     )
+
+                if config.debug_mode:
+                    rect = pygame.Rect(ix, y + 2, iw, ROW - 4)
+                    layout["cv_training_mode"] = rect
+                    train_label = "Training Mode ON" if config.cv_training_mode else "Training Mode"
+                    self._button(surface, rect, train_label, active=config.cv_training_mode)
+                    y += ROW + 2
+
+                if config.cv_training_mode and config.debug_mode:
                     rect = pygame.Rect(ix, y, iw, ROW - 4)
-                    layout["cv_capture_save"] = rect
-                    self._button(surface, rect, "Save Object", active=False)
+                    layout["cv_capture"] = rect
+                    capturing = config.cv_capture_status == "Identifying..."
+                    self._button(surface, rect, "Identifying..." if capturing else "Capture Object", active=capturing)
                     y += ROW
 
-                objects = config.cv_custom_objects or []
-                if objects:
-                    self._label(surface, f"Trained objects ({len(objects)})", ix, y)
-                    y += 17
-                    del_w = 28
-                    for i, obj in enumerate(objects):
-                        name_rect = pygame.Rect(ix, y, iw - del_w - 4, ROW - 4)
-                        del_rect = pygame.Rect(ix + iw - del_w, y, del_w, ROW - 4)
-                        layout[f"cv_obj_del_{i}"] = del_rect
-                        self._button(surface, name_rect, obj.label[:28], active=True)
-                        self._button(surface, del_rect, "✕", active=False)
+                    if config.cv_capture_status and config.cv_capture_status != "Identifying...":
+                        y = self._draw_status_text(surface, config.cv_capture_status, ix, iw, y, ok=bool(config.cv_capture_label))
+
+                    if config.cv_capture_label:
+                        y = self._draw_text_input(
+                            surface, layout,
+                            key="cv_capture_label",
+                            label="Label (rename if needed)",
+                            value=config.cv_capture_label,
+                            ix=ix, iw=iw, y=y,
+                        )
+                        rect = pygame.Rect(ix, y, iw, ROW - 4)
+                        layout["cv_capture_save"] = rect
+                        self._button(surface, rect, "Save Object", active=False)
                         y += ROW
+
+                    objects = config.cv_custom_objects or []
+                    if objects:
+                        self._label(surface, f"Trained objects ({len(objects)})", ix, y)
+                        y += 17
+                        del_w = 28
+                        for i, obj in enumerate(objects):
+                            name_rect = pygame.Rect(ix, y, iw - del_w - 4, ROW - 4)
+                            del_rect = pygame.Rect(ix + iw - del_w, y, del_w, ROW - 4)
+                            layout[f"cv_obj_del_{i}"] = del_rect
+                            self._button(surface, name_rect, obj.label[:28], active=True)
+                            self._button(surface, del_rect, "✕", active=False)
+                            y += ROW
+
+            if config.debug_mode:
+                rect = pygame.Rect(ix, y, iw, ROW - 4)
+                layout["vision_debug_enabled"] = rect
+                debug_label = "Vision Debug ON" if config.vision_debug_enabled else "Vision Debug OFF"
+                self._button(surface, rect, debug_label, active=config.vision_debug_enabled)
+                y += ROW + 2
+
+                self._label(surface, "Camera Index", ix, y)
+                y += 17
+                btn_w = (iw - 12) // 3
+                left = pygame.Rect(ix, y, btn_w, ROW - 4)
+                mid = pygame.Rect(ix + btn_w + 6, y, btn_w, ROW - 4)
+                right = pygame.Rect(ix + (btn_w + 6) * 2, y, btn_w, ROW - 4)
+                layout["camera_minus"] = left
+                layout["camera_plus"] = right
+                self._button(surface, left, "-", active=False)
+                self._button(surface, mid, f"{config.camera_index}", active=True)
+                self._button(surface, right, "+", active=False)
+                y += ROW
 
         self._content_h = y + ROW + PAD + self._scroll
         self._draw_scrollbar(surface, sx, sh)

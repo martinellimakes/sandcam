@@ -1,42 +1,74 @@
 {
-  "ai_enabled": false,
-  "camera_index": 1,
-  "change_threshold_mm": 5,
-  "colour_scheme": "terrain",
-  "cv_detection_api_key": "",
-  "cv_detection_api_model": "",
-  "cv_detection_api_url": "",
-  "cv_detection_backend": "yolo",
-  "cv_detection_confidence": 0.5,
-  "cv_detection_enabled": false,
-  "cv_detection_model": "yolo11n.pt",
-  "cv_ignore_labels": "person,hand,hands,head,face,arm,finger",
-  "cv_llm_interactions_enabled": false,
-  "cv_training_mode": false,
-  "dinosaur_count": 1,
-  "display_index": 1,
-  "foreground_reject_mm": 0,
-  "fullscreen": true,
-  "guide_challenges_enabled": true,
-  "guide_enabled": true,
-  "guide_update_seconds": 8.0,
-  "guide_verbosity": "normal",
-  "llm_backend": "template",
-  "llm_base_url": "http://127.0.0.1:1234/v1",
-  "llm_enabled": true,
-  "llm_model": "",
-  "llm_timeout_seconds": 2.0,
-  "max_depth_mm": 706,
-  "min_depth_mm": 383,
-  "object_reactions_enabled": false,
-  "persistence_frames": 1,
-  "shark_count": 5,
-  "show_contours": false,
-  "show_creatures": true,
-  "temporal_alpha": 0.05,
-  "vision_calibration_points": [],
-  "vision_debug_enabled": false,
-  "vision_enabled": false,
-  "windowed_h": 650,
-  "windowed_w": 900
+  "creatures": {
+    "counts": {
+      "dinosaurs": 5,
+      "sharks": 4
+    },
+    "enabled": true
+  },
+  "debug": {
+    "enabled": false
+  },
+  "display": {
+    "borderless": false,
+    "index": 0,
+    "windowed": {
+      "height": 650,
+      "width": 900
+    }
+  },
+  "guide": {
+    "challenges_enabled": true,
+    "enabled": false,
+    "llm": {
+      "enabled": false,
+      "provider": {
+        "api_style": "openai_compatible",
+        "base_url": "http://localhost:12434/engines/v1",
+        "location": "local",
+        "model": ""
+      },
+      "timeout_seconds": 2.0
+    },
+    "overlay_enabled": true,
+    "update_seconds": 8.0,
+    "verbosity": "normal"
+  },
+  "terrain": {
+    "colour_scheme": "terrain",
+    "depth": {
+      "max_mm": 1100,
+      "min_mm": 400
+    },
+    "show_contours": true,
+    "smoothing": {
+      "blend": 0.35,
+      "delay_frames": 4,
+      "reject_mm": 120,
+      "threshold_mm": 35
+    }
+  },
+  "vision": {
+    "calibration_points": [],
+    "camera_index": 0,
+    "debug_overlay_enabled": false,
+    "detection": {
+      "backend": "yolo",
+      "confidence": 0.5,
+      "enabled": false,
+      "ignore_labels": "person,hand,hands,head,face,arm,finger",
+      "llm_interactions_enabled": true,
+      "model": "yolo11n.pt",
+      "reasoner": {
+        "api_key": "",
+        "api_style": "openai_compatible",
+        "base_url": "http://localhost:12434/engines/v1",
+        "location": "local",
+        "model": ""
+      },
+      "training_mode": false
+    },
+    "enabled": false,
+    "object_reactions_enabled": true
+  }
 }

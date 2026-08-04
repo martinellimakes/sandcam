@@ -32,10 +32,13 @@ _SYSTEM_PROMPT = (
 )
 
 
+DEFAULT_LOCAL_BASE_URL = "http://localhost:12434/engines/v1"
+
+
 @dataclass(frozen=True)
 class ProviderConfig:
     backend: str = "template"
-    base_url: str = "http://127.0.0.1:1234/v1"
+    base_url: str = DEFAULT_LOCAL_BASE_URL
     model: str = ""
     timeout_seconds: float = 2.0
     api_key: str | None = None

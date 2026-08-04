@@ -24,6 +24,9 @@ from typing import Any, Protocol
 import numpy as np
 
 
+DEFAULT_LOCAL_BASE_URL = "http://localhost:12434/engines/v1"
+
+
 # ── raw detection ─────────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
@@ -108,7 +111,8 @@ class OpenAIVisionDetector:
     """
     Object detection via any OpenAI-compatible vision API.
     Sends a compressed JPEG and parses a JSON detection list from the response.
-    Works with cloud APIs (GPT-4o, Claude) and local servers (LM Studio, Ollama).
+    Works with cloud APIs (GPT-4o, Claude) and local servers (Docker Model Runner,
+    LM Studio, Ollama-compatible gateways).
     """
 
     _SYSTEM = (
@@ -123,7 +127,7 @@ class OpenAIVisionDetector:
 
     def __init__(
         self,
-        base_url: str = "http://127.0.0.1:1234/v1",
+        base_url: str = DEFAULT_LOCAL_BASE_URL,
         model: str = "gpt-4o",
         api_key: str = "",
         timeout: float = 8.0,
@@ -572,7 +576,7 @@ def build_cv_layer(
         interval = 0.15
     elif backend_name == "openai_vision":
         backend = OpenAIVisionDetector(
-            base_url=api_url or "http://127.0.0.1:1234/v1",
+            base_url=api_url or DEFAULT_LOCAL_BASE_URL,
             model=api_model or "gpt-4o",
             api_key=api_key,
             timeout=timeout,

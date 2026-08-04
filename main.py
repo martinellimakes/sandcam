@@ -29,8 +29,7 @@ from creatures import CreatureManager
 from cv_detector import build_cv_layer
 from cv_interaction import CVInteractionEngine
 from cv_object_store import CustomObject, identify_object, load_objects, save_objects
-# from depth_source import MouseSimulator
-from depth_source import KinectV1Source
+from depth_source import KinectV1Source, MouseSimulator
 from interaction_engine import InteractionEngine
 from renderer import Renderer
 from ui import Config, Sidebar, draw_guide_overlay
@@ -258,6 +257,10 @@ def _compute_render_size(display_w: int, display_h: int) -> tuple[int, int]:
     return render_w, render_h
 
 
+def _supports_mouse_sculpt(source: object) -> bool:
+    return isinstance(source, MouseSimulator)
+
+
 def _screen_to_scene(
     x: int, y: int, screen_w: int, screen_h: int, scene_w: int, scene_h: int
 ) -> tuple[int, int]:
@@ -270,7 +273,11 @@ def _make_guide(config: Config) -> GuideEngine | None:
     if not config.ai_enabled:
         return None
 
-    backend = config.llm_backend if config.llm_enabled else "template"
+    backend = (
+        "local_openai_compatible"
+        if config.llm_provider_location == "local"
+        else "cloud_openai_compatible"
+    ) if config.llm_enabled else "template"
     provider_config = ProviderConfig(
         backend=backend,
         base_url=config.llm_base_url,
@@ -384,7 +391,7 @@ def _apply_cv_config(
         )
         print(f"[CV] loaded {len(objects)} custom object(s): {', '.join(o.label for o in objects)}")
 
-    if config.cv_llm_interactions_enabled and config.llm_enabled and config.llm_backend != "template":
+    if config.cv_llm_interactions_enabled and config.llm_enabled:
         cv_interactions.configure_llm(
             base_url=config.llm_base_url,
             model=config.llm_model,
@@ -433,6 +440,7 @@ def main() -> int:
     camera_discovery = AsyncCameraDiscovery()
     camera_tester = AsyncCameraTester()
     llm_tester = AsyncConnectionTester()
+    cv_reasoner_tester = AsyncConnectionTester()
     sidebar  = Sidebar()
     debug_font = pygame.font.SysFont(None, 18)
     hud_font = pygame.font.SysFont(None, 22)
@@ -444,6 +452,7 @@ def main() -> int:
         running = True
         while running:
             dt = clock.tick(FPS) / 1000.0
+            can_sculpt = _supports_mouse_sculpt(source)
 
             # ── events ────────────────────────────────────────────────────────
             for event in pygame.event.get():
@@ -462,7 +471,7 @@ def main() -> int:
                     elif event.key == pygame.K_TAB:
                         sidebar.toggle()
                     elif event.key == pygame.K_r:
-                        if hasattr(source, "reset"):
+                        if can_sculpt and hasattr(source, "reset"):
                             source.reset()
                     elif event.key == pygame.K_c:
                         config.show_contours = not config.show_contours
@@ -470,7 +479,7 @@ def main() -> int:
                     elif event.key == pygame.K_g:
                         config.show_creatures = not config.show_creatures
                         config.request_save()
-                elif event.type == pygame.MOUSEWHEEL:
+                elif event.type == pygame.MOUSEWHEEL and can_sculpt:
                     brush_radius = max(BRUSH_MIN, min(BRUSH_MAX,
                                                       brush_radius + event.y * 4))
 
@@ -590,7 +599,11 @@ def main() -> int:
 
             if config.llm_test_requested:
                 config.llm_test_requested = False
-                backend = config.llm_backend if config.llm_enabled else "template"
+                backend = (
+                    "local_openai_compatible"
+                    if config.llm_provider_location == "local"
+                    else "cloud_openai_compatible"
+                ) if config.llm_enabled else "template"
                 provider_config = ProviderConfig(
                     backend=backend,
                     base_url=config.llm_base_url,
@@ -600,6 +613,23 @@ def main() -> int:
                 started = llm_tester.start(provider_config)
                 if not started and config.llm_test_status == "running":
                     config.llm_test_message = "A connection test is already running."
+
+            if config.cv_reasoner_test_requested:
+                config.cv_reasoner_test_requested = False
+                provider_config = ProviderConfig(
+                    backend=(
+                        "local_openai_compatible"
+                        if config.cv_reasoner_location == "local"
+                        else "cloud_openai_compatible"
+                    ),
+                    base_url=config.cv_detection_api_url or config.llm_base_url,
+                    model=config.cv_detection_api_model or config.llm_model,
+                    timeout_seconds=config.llm_timeout_seconds,
+                    api_key=config.cv_detection_api_key or None,
+                )
+                started = cv_reasoner_tester.start(provider_config)
+                if not started and config.cv_reasoner_test_status == "running":
+                    config.cv_reasoner_test_message = "A CV reasoner test is already running."
 
             if config.camera_test_requested:
                 config.camera_test_requested = False
@@ -617,6 +647,11 @@ def main() -> int:
             if llm_test_result is not None:
                 config.llm_test_status = "ok" if llm_test_result.ok else "error"
                 config.llm_test_message = llm_test_result.summary
+
+            cv_reasoner_test_result = cv_reasoner_tester.poll()
+            if cv_reasoner_test_result is not None:
+                config.cv_reasoner_test_status = "ok" if cv_reasoner_test_result.ok else "error"
+                config.cv_reasoner_test_message = cv_reasoner_test_result.summary
 
             camera_test_result = camera_tester.poll()
             if camera_test_result is not None:
@@ -655,19 +690,20 @@ def main() -> int:
             )
 
             # ── sculpt (simulator only) ───────────────────────────────────────
-            buttons = pygame.mouse.get_pressed()
             mx, my  = pygame.mouse.get_pos()
-            scene_mx, scene_my = _screen_to_scene(
-                mx, my, screen.get_width(), screen.get_height(), render_w, render_h
-            )
-            scene_brush_radius = max(
-                1,
-                int(round(brush_radius * min(render_w / screen.get_width(), render_h / screen.get_height()))),
-            )
-            if buttons[0]:
-                source.sculpt(scene_mx, scene_my, scene_brush_radius, +BRUSH_DELTA)
-            elif buttons[2]:
-                source.sculpt(scene_mx, scene_my, scene_brush_radius, -BRUSH_DELTA)
+            if can_sculpt:
+                buttons = pygame.mouse.get_pressed()
+                scene_mx, scene_my = _screen_to_scene(
+                    mx, my, screen.get_width(), screen.get_height(), render_w, render_h
+                )
+                scene_brush_radius = max(
+                    1,
+                    int(round(brush_radius * min(render_w / screen.get_width(), render_h / screen.get_height()))),
+                )
+                if buttons[0]:
+                    source.sculpt(scene_mx, scene_my, scene_brush_radius, +BRUSH_DELTA)
+                elif buttons[2]:
+                    source.sculpt(scene_mx, scene_my, scene_brush_radius, -BRUSH_DELTA)
 
             # ── render ────────────────────────────────────────────────────────
             frame = source.get_frame()
@@ -785,12 +821,15 @@ def main() -> int:
                 challenge_done=bool(guide_message.completed) if guide_message else False,
             )
 
-            pygame.draw.circle(screen, (255, 255, 255), (mx, my), brush_radius, 1)
+            if can_sculpt:
+                pygame.draw.circle(screen, (255, 255, 255), (mx, my), brush_radius, 1)
 
             creatures_state = "on" if config.show_creatures else "off"
             ai_state = "ai:on" if config.ai_enabled else "ai:off"
-            hud = (f"Tab settings  C contours  G creatures:{creatures_state}  R reset  "
-                   f"brush {brush_radius}px  |  {config.colour_scheme}  {ai_state}")
+            hud = f"Tab settings  C contours  G creatures:{creatures_state}"
+            if can_sculpt:
+                hud += f"  R reset  brush {brush_radius}px"
+            hud += f"  |  {config.colour_scheme}  {ai_state}"
             label = hud_font.render(hud, True, (200, 200, 200))
             screen.blit(label, (10, screen.get_height() - 24))
 
@@ -823,6 +862,10 @@ def main() -> int:
             pass
         try:
             llm_tester.close()
+        except Exception:
+            pass
+        try:
+            cv_reasoner_tester.close()
         except Exception:
             pass
         try:

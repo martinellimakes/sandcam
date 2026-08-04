@@ -940,6 +940,7 @@ class CreatureManager:
     def update(self, frame: np.ndarray, dt: float) -> None:
         h, w = frame.shape
         self._creatures = [creature for creature in self._creatures if creature.alive_on(frame)]
+        self._trim_excess()
         self._spawn_missing(frame, w, h)
         for creature in self._creatures:
             creature.update(frame, dt)
@@ -969,6 +970,20 @@ class CreatureManager:
                     break
                 self._creatures.append(creature)
                 counts[cls] += 1
+
+    def _trim_excess(self) -> None:
+        kept: list[Creature] = []
+        counts = {cls: 0 for cls in self._targets}
+        for creature in self._creatures:
+            creature_cls = type(creature)
+            target = self._targets.get(creature_cls)
+            if target is None:
+                kept.append(creature)
+                continue
+            if counts[creature_cls] < target:
+                kept.append(creature)
+                counts[creature_cls] += 1
+        self._creatures = kept
 
     @staticmethod
     def _try_spawn(cls: type[Creature], frame: np.ndarray, w: int, h: int) -> Creature | None:

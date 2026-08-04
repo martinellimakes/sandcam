@@ -77,7 +77,7 @@ class GuideTests(unittest.TestCase):
         provider = OpenAICompatibleNarrator(
             ProviderConfig(
                 backend="local_openai_compatible",
-                base_url="http://127.0.0.1:1234/v1",
+                base_url="http://localhost:12434/engines/v1",
                 model="test-model",
             ),
             opener=lambda req, timeout: _FakeResponse(
@@ -178,7 +178,7 @@ class GuideTests(unittest.TestCase):
         result = test_provider_connection(
             ProviderConfig(
                 backend="local_openai_compatible",
-                base_url="http://127.0.0.1:1234/v1",
+                base_url="http://localhost:12434/engines/v1",
                 model="test-model",
             ),
             opener=lambda req, timeout: _FakeResponse(
