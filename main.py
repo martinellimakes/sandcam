@@ -28,7 +28,13 @@ from ai_guide import (
 from creatures import CreatureManager
 from cv_detector import build_cv_layer
 from cv_interaction import CVInteractionEngine
-from cv_object_store import CustomObject, identify_object, load_objects, save_objects
+from cv_object_store import (
+    CustomObject,
+    encode_training_crop_b64,
+    identify_object,
+    load_objects,
+    save_objects,
+)
 from depth_source import DepthSource, KinectV1Source, MouseSimulator
 from interaction_engine import InteractionEngine
 from renderer import Renderer
@@ -423,19 +429,25 @@ def _apply_cv_config(
             api_key=config.cv_detection_api_key,
             timeout=config.llm_timeout_seconds,
         )
-        print(f"[CV] loaded {len(objects)} custom object(s): {', '.join(o.label for o in objects)}")
+        config.cv_detection_status = f"Loaded {len(objects)} custom object(s)."
 
-    if config.cv_llm_interactions_enabled and config.llm_enabled:
+    reasoner_url = (config.cv_detection_api_url or config.llm_base_url).strip()
+    reasoner_model = (config.cv_detection_api_model or config.llm_model).strip()
+    if config.cv_llm_interactions_enabled and reasoner_url and reasoner_model:
         cv_interactions.configure_llm(
-            base_url=config.llm_base_url,
-            model=config.llm_model,
-            api_key="",
+            base_url=reasoner_url,
+            model=reasoner_model,
+            api_key=config.cv_detection_api_key,
             timeout=config.llm_timeout_seconds,
         )
     else:
         cv_interactions.disable_llm()
 
-    return ""
+    return (
+        f"Loaded {len(objects)} custom object(s)."
+        if objects
+        else f"{config.cv_detection_backend.upper()} detector ready."
+    )
 
 
 def main() -> int:
@@ -586,22 +598,43 @@ def main() -> int:
                 config.cv_capture_requested = False
                 raw_frame = vision.get_latest_frame() if vision is not None else None
                 if raw_frame is not None:
-                    import base64 as _b64
                     try:
-                        import cv2 as _cv2  # type: ignore
-                        _, buf = _cv2.imencode(".jpg", raw_frame, [_cv2.IMWRITE_JPEG_QUALITY, 80])
-                        frame_b64 = _b64.b64encode(buf.tobytes()).decode()
+                        bbox = None
+                        if vision is not None:
+                            cv_objs = vision.get_cv_objects(
+                                calibration,
+                                (render_w, render_h),
+                                frame=None,
+                                min_stable_seconds=0.0,
+                            )
+                            if cv_objs:
+                                best = max(
+                                    cv_objs,
+                                    key=lambda o: max(1, o.bbox[2] - o.bbox[0])
+                                    * max(1, o.bbox[3] - o.bbox[1]),
+                                )
+                                bbox = best.bbox
+                        crop_b64 = encode_training_crop_b64(raw_frame, bbox)
+                        config.cv_capture_thumbnail_b64 = crop_b64
                         api_url = config.cv_detection_api_url or config.llm_base_url
                         api_model = config.cv_detection_api_model or config.llm_model
-                        capture.start(
-                            frame_b64,
-                            base_url=api_url,
-                            model=api_model,
-                            api_key=config.cv_detection_api_key,
-                            timeout=config.llm_timeout_seconds,
-                        )
+                        if not api_url or not api_model:
+                            config.cv_capture_status = (
+                                "Error: configure CV reasoner URL and model before capturing."
+                            )
+                        else:
+                            config.cv_capture_status = "Identifying..."
+                            capture.start(
+                                crop_b64,
+                                base_url=api_url,
+                                model=api_model,
+                                api_key=config.cv_detection_api_key,
+                                timeout=config.llm_timeout_seconds,
+                            )
                     except ImportError:
                         config.cv_capture_status = "Error: OpenCV required for capture."
+                    except Exception as exc:
+                        config.cv_capture_status = f"Error: {exc}"
                 else:
                     config.cv_capture_status = "Error: no camera frame available."
 
@@ -616,7 +649,6 @@ def main() -> int:
                     config.cv_capture_label = label
                     config.cv_capture_description = desc
                     config.cv_capture_status = f"Found: {label}"
-                    print(f"[CV training] identified '{label}': {desc}")
 
             if config.cv_capture_save_requested:
                 config.cv_capture_save_requested = False
@@ -635,7 +667,6 @@ def main() -> int:
                     config.cv_capture_thumbnail_b64 = ""
                     config.cv_capture_status = f"Saved '{objects[-1].label}'. Place next object or exit training."
                     config.cv_detection_changed = True  # reload layer with new objects
-                    print(f"[CV training] saved '{objects[-1].label}' ({len(objects)} total)")
 
             if config.llm_test_requested:
                 config.llm_test_requested = False
@@ -812,6 +843,15 @@ def main() -> int:
                         scene.blit(tag, (px + 8, py - 8))
                 vision_events = interactions.pop_events()
                 vision_events.extend(cv_interactions.pop_events())
+                if (
+                    config.cv_detection_enabled
+                    and not config.cv_capture_status
+                    and not str(config.cv_detection_status).startswith("Error")
+                    and not str(config.cv_detection_status).startswith("Loaded")
+                ):
+                    live = vision.cv_status_summary()
+                    if live:
+                        config.cv_detection_status = live
 
             guide_message = None
             active_challenge = None

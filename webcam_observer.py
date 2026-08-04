@@ -522,6 +522,11 @@ class WebcamObserver:
         """Attach or detach a CVDetectionLayer.  Thread-safe: safe to call any time."""
         self._cv_layer = layer
 
+    def cv_status_summary(self) -> str:
+        if self._cv_layer is None:
+            return ""
+        return self._cv_layer.status_summary()
+
     def get_cv_objects(
         self,
         calibration: CalibrationData,

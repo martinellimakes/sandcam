@@ -60,14 +60,58 @@ def save_objects(objects: list[CustomObject]) -> None:
     )
 
 
-def _vision_call(
-    frame_b64: str,
-    system: str,
-    base_url: str,
-    model: str,
-    api_key: str,
-    timeout: float,
-) -> dict:
+def encode_jpeg_b64(frame_bgr, *, quality: int = 80) -> str:
+    """Encode a BGR frame as a base64 JPEG string. Requires OpenCV."""
+    import cv2  # type: ignore
+
+    ok, buf = cv2.imencode(".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, int(quality)])
+    if not ok:
+        raise RuntimeError("JPEG encode failed")
+    return base64.b64encode(buf.tobytes()).decode("ascii")
+
+
+def crop_for_training(
+    frame_bgr,
+    bbox: tuple[int, int, int, int] | None = None,
+    *,
+    pad_ratio: float = 0.25,
+    center_fraction: float = 0.45,
+):
+    """
+    Return a BGR crop for training identify requests.
+
+    Prefer ``bbox`` when available (with padding). Otherwise take a centered
+    square covering ``center_fraction`` of the shorter frame side.
+    """
+    h, w = frame_bgr.shape[:2]
+    if bbox is not None:
+        x1, y1, x2, y2 = bbox
+        bw = max(1, x2 - x1)
+        bh = max(1, y2 - y1)
+        pad_x = int(bw * pad_ratio)
+        pad_y = int(bh * pad_ratio)
+        x1 = max(0, x1 - pad_x)
+        y1 = max(0, y1 - pad_y)
+        x2 = min(w, x2 + pad_x)
+        y2 = min(h, y2 + pad_y)
+        return frame_bgr[y1:y2, x1:x2]
+
+    side = max(1, int(min(h, w) * center_fraction))
+    cx, cy = w // 2, h // 2
+    x1 = max(0, cx - side // 2)
+    y1 = max(0, cy - side // 2)
+    x2 = min(w, x1 + side)
+    y2 = min(h, y1 + side)
+    return frame_bgr[y1:y2, x1:x2]
+
+
+def encode_training_crop_b64(
+    frame_bgr,
+    bbox: tuple[int, int, int, int] | None = None,
+    *,
+    quality: int = 80,
+) -> str:
+    return encode_jpeg_b64(crop_for_training(frame_bgr, bbox), quality=quality)
     payload = json.dumps({
         "model": model,
         "max_tokens": 200,

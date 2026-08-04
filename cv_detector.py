@@ -388,7 +388,6 @@ class _AsyncTrackIdentifier:
             timeout=self._timeout,
         )
         if label:
-            print(f"[CV] track #{track_id} matched custom object '{label}'")
             with self._lock:
                 self._results[track_id] = label
 
@@ -435,6 +434,8 @@ class CVDetectionLayer:
         self._tracks: list[CVRawTrack] = []
         self._lock = threading.Lock()
         self._running = True
+        self._last_error = ""
+        self._track_count = 0
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
@@ -452,6 +453,22 @@ class CVDetectionLayer:
     def get_raw_tracks(self) -> list[CVRawTrack]:
         with self._lock:
             return list(self._tracks)
+
+    @property
+    def last_error(self) -> str:
+        with self._lock:
+            return self._last_error
+
+    @property
+    def track_count(self) -> int:
+        with self._lock:
+            return self._track_count
+
+    def status_summary(self) -> str:
+        with self._lock:
+            if self._last_error:
+                return f"Error: {self._last_error}"
+            return f"Tracking {self._track_count} object(s)"
 
     def set_custom_objects(
         self,
@@ -507,39 +524,24 @@ class CVDetectionLayer:
             last_run = now
             try:
                 raw = self._backend.detect(frame)
+                with self._lock:
+                    self._last_error = ""
             except Exception as exc:
-                print(f"[CV] detection error: {exc}")
+                with self._lock:
+                    self._last_error = str(exc)
                 raw = []
             above_threshold = [d for d in raw if d.confidence >= self._min_confidence]
-            ignored = [d for d in above_threshold if d.label.lower() in self._ignore]
-            filtered = [d for d in above_threshold if d.label.lower() not in self._ignore]
-
-            ts = time.strftime("%H:%M:%S")
-            if ignored:
-                counts: dict[str, int] = {}
-                for d in ignored:
-                    counts[d.label] = counts.get(d.label, 0) + 1
-                summary = ", ".join(f"{lbl}×{n}" for lbl, n in counts.items())
-                print(f"[CV {ts}] ignored ({summary})")
-            if filtered:
-                for d in filtered:
-                    x1, y1, x2, y2 = d.bbox
-                    print(f"[CV {ts}] {d.label:20s}  conf={d.confidence:.2f}  bbox=({x1},{y1})-({x2},{y2})")
-            else:
-                print(f"[CV {ts}] no detections above threshold {self._min_confidence:.2f}")
+            filtered = [
+                d for d in above_threshold if d.label.lower() not in self._ignore
+            ]
 
             tracks = self._tracker.update(filtered, now)
 
             current_ids = {t.track_id for t in tracks}
             appeared = current_ids - prev_track_ids
-            disappeared = prev_track_ids - current_ids
             for t in tracks:
-                if t.track_id in appeared:
-                    print(f"[CV] +track #{t.track_id}  '{t.label}'  conf={t.confidence:.2f}")
-                    if self._track_identifier is not None:
-                        self._track_identifier.submit(t.track_id, frame, t.bbox)
-            for tid in disappeared:
-                print(f"[CV] -track #{tid}  removed")
+                if t.track_id in appeared and self._track_identifier is not None:
+                    self._track_identifier.submit(t.track_id, frame, t.bbox)
             prev_track_ids = current_ids
 
             # Apply any completed custom-object identifications
@@ -551,6 +553,7 @@ class CVDetectionLayer:
 
             with self._lock:
                 self._tracks = tracks
+                self._track_count = len(tracks)
 
 
 # ── factory ───────────────────────────────────────────────────────────────────
